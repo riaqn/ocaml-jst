@@ -639,3 +639,13 @@ global in various examples above.
 
 In the interface for the stdlib (and as re-exported by Base), this feature is
 enabled by use of the `[@local_opt]` annotation on `external` declarations.
+
+## Mode Crossing
+  Immediates such as integers are immediately available, instead of pointing to
+  a memory location on heap or stack. As such, they are not constrained by modes
+  at all; in other words, *immediates cross modes*. For example, an integer
+  of any mode can be casted to an integer of any mode. Note that a global value
+  can be casted to a local value anyway, so it is the other direction of casting
+  that is enabled by mode crossing. For compiler performance reasons, however,
+  we only check for potential mode crossing at several keypoints, which is
+  detailed by [some examples](https://github.com/ocaml-flambda/ocaml-jst/blob/main/testsuite/tests/typing-local/crossing.ml)
