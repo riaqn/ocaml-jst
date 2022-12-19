@@ -53,7 +53,7 @@ type type_expected = private {
 type pattern_variable =
   {
     pv_id: Ident.t;
-    pv_mode: Value_mode.t;
+    pv_mode: Mode.Value.t;
     pv_type: type_expr;
     pv_loc: Location.t;
     pv_as_var: bool;
@@ -231,9 +231,12 @@ type error =
   | Missing_type_constraint
   | Wrong_expected_kind of wrong_kind_sort * wrong_kind_context * type_expr
   | Expr_not_a_record_type of type_expr
-  | Local_value_escapes of Value_mode.error * Env.escaping_context option
-  | Param_mode_mismatch of type_expr
+  | Submode_failed of Mode.Value.error * Env.escaping_context option * Env.shared_context list
+  | Param_mode_mismatch of type_expr * Mode.Alloc.error
   | Uncurried_function_escapes
+  | Captures_unique_value
+  | Unique_at_toplevel
+  | Call_once_function_called_shared
   | Local_return_annotation_mismatch of Location.t
   | Bad_tail_annotation of [`Conflict|`Not_a_tailcall]
 

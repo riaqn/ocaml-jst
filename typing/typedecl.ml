@@ -1355,10 +1355,10 @@ let make_native_repr env core_type ty ~global_repr =
     end
 
 let prim_const_mode m =
-  match Types.Alloc_mode.check_const m with
-  | Some Global -> Prim_global
-  | Some Local -> Prim_local
-  | None -> assert false
+  match Mode.Alloc.check_const m with
+  | (Some Global, _) -> Prim_global
+  | (Some Local, _) -> Prim_local
+  | (_, _) -> assert false
 
 let rec parse_native_repr_attributes env core_type ty rmode ~global_repr =
   match core_type.ptyp_desc, get_desc ty,
@@ -1366,7 +1366,7 @@ let rec parse_native_repr_attributes env core_type ty rmode ~global_repr =
   with
   | Ptyp_arrow _, Tarrow _, Native_repr_attr_present kind  ->
     raise (Error (core_type.ptyp_loc, Cannot_unbox_or_untag_type kind))
-  | Ptyp_arrow (_, ct1, ct2), Tarrow ((_,marg,mret), t1, t2, _), _
+  | Ptyp_arrow (_, _, ct1, ct2), Tarrow ((_,marg,_,mret), t1, t2, _), _
     when not (Builtin_attributes.has_curry core_type.ptyp_attributes) ->
     let repr_arg = make_native_repr env ct1 t1 ~global_repr in
     let mode =

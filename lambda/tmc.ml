@@ -120,7 +120,7 @@ end = struct
 
   let apply constr t =
     let block_args = List.append constr.before @@ t :: constr.after in
-    Lprim (Pmakeblock (constr.tag, constr.flag, constr.shape, alloc_heap),
+    Lprim (Pmakeblock (constr.tag, constr.flag, constr.shape, alloc_heap_shared),
            block_args, constr.loc)
 
   let tmc_placeholder =
@@ -914,6 +914,8 @@ let rec choice ctx t =
     | Pctconst _
     | Pbswap16
     | Pbbswap _
+    | Preuseblock _ 
+    | Preusefloatblock _
     | Pint_as_pointer
       ->
         let primargs = traverse_list ctx primargs in

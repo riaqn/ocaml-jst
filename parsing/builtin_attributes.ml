@@ -519,6 +519,18 @@ let has_global attrs =
 let has_nonlocal attrs =
   check_local ["extension.nonlocal"] ["ocaml.nonlocal"; "nonlocal"] attrs
 
+let check_unique ext_names other_names attr =
+  if has_attribute ext_names attr then
+    if not (Clflags.Extension.is_enabled Unique) then
+      Error ()
+    else
+      Ok true
+  else
+    Ok (has_attribute other_names attr)
+
+let has_unique attr =
+  check_unique ["extension.unique"] ["ocaml.unique"; "unique"] attr
+
 let tailcall attr =
   let has_nontail = has_attribute ["ocaml.nontail"; "nontail"] attr in
   let tail_attrs = filter_attributes [["ocaml.tail";"tail"], true] attr in

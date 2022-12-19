@@ -473,9 +473,10 @@ let remove_mode_variables ty =
     if TypeSet.mem ty !visited then () else begin
       visited := TypeSet.add ty !visited;
       match get_desc ty with
-      | Tarrow ((_,marg,mret),targ,tret,_) ->
-         let _ = Alloc_mode.constrain_lower marg in
-         let _ = Alloc_mode.constrain_lower mret in
+      | Tarrow ((_,marg,marr,mret),targ,tret,_) ->
+         let _ = Mode.Alloc.constrain_global_shared marg in
+         let _ = Mode.Uniqueness.constrain_upper marr in
+         let _ = Mode.Alloc.constrain_global_shared mret in
          go targ; go tret
       | _ -> iter_type_expr go ty
     end
@@ -1474,8 +1475,8 @@ let instance_label fixed lbl =
   )
 
 let prim_mode mvar = function
-  | Primitive.Prim_global, _ -> Alloc_mode.global
-  | Primitive.Prim_local, _ -> Alloc_mode.local
+  | Primitive.Prim_global, _ -> Mode.Alloc.global
+  | Primitive.Prim_local, _ -> Mode.Alloc.local
   | Primitive.Prim_poly, _ ->
     match mvar with
     | Some mvar -> mvar
@@ -1483,16 +1484,16 @@ let prim_mode mvar = function
 
 let rec instance_prim_locals locals mvar macc finalret ty =
   match locals, get_desc ty with
-  | l :: locals, Tarrow ((lbl,_,mret),arg,ret,commu) ->
+  | l :: locals, Tarrow ((lbl,_,marr,mret),arg,ret,commu) ->
      let marg = prim_mode (Some mvar) l in
-     let macc = Alloc_mode.join [marg; mret; macc] in
+     let macc = Mode.Alloc.join [marg; mret; macc] in
      let mret =
        match locals with
        | [] -> finalret
        | _ :: _ -> macc (* curried arrow *)
      in
      let ret = instance_prim_locals locals mvar macc finalret ret in
-     newty2 ~level:(get_level ty) (Tarrow ((lbl,marg,mret),arg,ret, commu))
+     newty2 ~level:(get_level ty) (Tarrow ((lbl,marg,marr,mret),arg,ret, commu))
   | _ :: _, _ -> assert false
   | [], _ ->
      ty
@@ -1501,10 +1502,10 @@ let instance_prim_mode (desc : Primitive.description) ty =
   let is_poly = function Primitive.Prim_poly, _ -> true | _ -> false in
   if is_poly desc.prim_native_repr_res ||
        List.exists is_poly desc.prim_native_repr_args then
-    let mode = Alloc_mode.newvar () in
+    let mode = Mode.Alloc.newvar () in
     let finalret = prim_mode (Some mode) desc.prim_native_repr_res in
     instance_prim_locals desc.prim_native_repr_args
-      mode Alloc_mode.global finalret ty,
+      mode Mode.Alloc.global finalret ty,
     Some mode
   else
     ty, None
@@ -2337,7 +2338,7 @@ let rec mcomp type_pairs env t1 t2 =
         | (Tvar _, _)
         | (_, Tvar _)  ->
             ()
-        | (Tarrow ((l1,_,_), t1, u1, _), Tarrow ((l2,_,_), t2, u2, _))
+        | (Tarrow ((l1,_,_,_), t1, u1, _), Tarrow ((l2,_,_,_), t2, u2, _))
           when l1 = l2 || not (is_optional l1 || is_optional l2) ->
             mcomp type_pairs env t1 t2;
             mcomp type_pairs env u1 u2;
@@ -2650,9 +2651,14 @@ let unify_package env unify_list lv1 p1 fl1 lv2 p2 fl2 =
   && !package_subtype env p2 fl2 p1 fl1 then () else raise Not_found
 
 let unify_alloc_mode_for tr_exn a b =
-  match Alloc_mode.equate a b with
+  match Mode.Alloc.equate a b with
   | Ok () -> ()
-  | Error () -> raise_unexplained_for tr_exn
+  | Error _ -> raise_unexplained_for tr_exn
+
+let unify_uniqueness_mode_for tr_exn a b =
+  match Mode.Uniqueness.equate a b with
+  | Ok () -> ()
+  | Error _ -> raise_unexplained_for tr_exn
 
 (* force unification in Reither when one side has a non-conjunctive type *)
 let rigid_variants = ref false
@@ -2824,13 +2830,14 @@ and unify3 env t1 t1' t2 t2' =
     end;
     try
       begin match (d1, d2) with
-        (Tarrow ((l1,a1,r1), t1, u1, c1),
-         Tarrow ((l2,a2,r2), t2, u2, c2))
+        (Tarrow ((l1,a1,m1,r1), t1, u1, c1),
+         Tarrow ((l2,a2,m2,r2), t2, u2, c2))
            when
              (l1 = l2 ||
               (!Clflags.classic || in_pattern_mode ()) &&
                not (is_optional l1 || is_optional l2)) ->
           unify_alloc_mode_for Unify a1 a2;
+          unify_uniqueness_mode_for Unify m1 m2;
           unify_alloc_mode_for Unify r1 r2;
           unify  env t1 t2; unify env  u1 u2;
           begin match is_commu_ok c1, is_commu_ok c2 with
@@ -3321,15 +3328,16 @@ exception Filter_arrow_failed of filter_arrow_failure
 let filter_arrow env t l =
   let function_type level =
     let t1 = newvar2 level and t2 = newvar2 level in
-    let marg = Alloc_mode.newvar () in
-    let mret = Alloc_mode.newvar () in
-    let t' = newty2 ~level (Tarrow ((l,marg,mret), t1, t2, commu_ok)) in
-    t', marg, t1, mret, t2
+    let marg = Mode.Alloc.newvar () in
+    let mret = Mode.Alloc.newvar () in
+    let marr = Mode.Uniqueness.newvar () in 
+    let t' = newty2 ~level (Tarrow ((l,marg,marr,mret), t1, t2, commu_ok)) in
+    t', marg, t1, marr, mret, t2
   in
   let t =
     try expand_head_trace env t
     with Unify_trace trace ->
-      let t', _, _, _, _ = function_type (get_level t) in
+      let t', _, _, _, _, _ = function_type (get_level t) in
       raise (Filter_arrow_failed
                (Unification_error
                   (expand_to_unification_error
@@ -3338,12 +3346,12 @@ let filter_arrow env t l =
   in
   match get_desc t with
     Tvar _ ->
-      let t', marg, t1, mret, t2 = function_type (get_level t) in
+      let t', marg, t1, marr, mret, t2 = function_type (get_level t) in
       link_type t t';
-      (marg, t1, mret, t2)
-  | Tarrow((l', marg, mret), t1, t2, _) ->
+      (marg, t1, marr, mret, t2)
+  | Tarrow((l', marg, arr, mret), t1, t2, _) ->
       if l = l' || !Clflags.classic && l = Nolabel && not (is_optional l')
-      then (marg, t1, mret, t2)
+      then (marg, t1, arr, mret, t2)
       else raise (Filter_arrow_failed
                     (Label_mismatch
                        { got = l; expected = l'; expected_type = t }))
@@ -3781,13 +3789,24 @@ let relevant_pairs pairs v =
 let moregen_alloc_mode v a1 a2 =
   match
     match v with
-    | Invariant -> Alloc_mode.equate a1 a2
-    | Covariant -> Alloc_mode.submode a1 a2
-    | Contravariant -> Alloc_mode.submode a2 a1
+    | Invariant -> Mode.Alloc.equate a1 a2
+    | Covariant -> Mode.Alloc.submode a1 a2
+    | Contravariant -> Mode.Alloc.submode a2 a1
     | Bivariant -> Ok ()
   with
   | Ok () -> ()
-  | Error () -> raise_unexplained_for Moregen
+  | Error _  -> raise_unexplained_for Moregen
+
+let moregen_uniqueness_mode v a1 a2 =
+  match
+    match v with
+    | Invariant -> Mode.Uniqueness.equate a1 a2
+    | Covariant -> Mode.Uniqueness.submode a1 a2
+    | Contravariant -> Mode.Uniqueness.submode a2 a1
+    | Bivariant -> Ok ()
+  with
+  | Ok () -> ()
+  | Error _ -> raise_unexplained_for Moregen
 
 let may_instantiate inst_nongen t1 =
   let level = get_level t1 in
@@ -3819,13 +3838,14 @@ let rec moregen inst_nongen variance type_pairs env t1 t2 =
               moregen_occur env (get_level t1') t2;
               update_scope_for Moregen (get_scope t1') t2;
               link_type t1' t2
-          | (Tarrow ((l1,a1,r1), t1, u1, _),
-             Tarrow ((l2,a2,r2), t2, u2, _)) when
+          | (Tarrow ((l1,a1,m1,r1), t1, u1, _),
+             Tarrow ((l2,a2,m2,r2), t2, u2, _)) when
                (l1 = l2
                 || !Clflags.classic && not (is_optional l1 || is_optional l2)) ->
               moregen inst_nongen (neg_variance variance) type_pairs env t1 t2;
               moregen inst_nongen variance type_pairs env u1 u2;
               moregen_alloc_mode (neg_variance variance) a1 a2;
+              moregen_uniqueness_mode (neg_variance variance) m1 m2;
               moregen_alloc_mode variance r1 r2
           | (Ttuple tl1, Ttuple tl2) ->
               moregen_list inst_nongen variance type_pairs env tl1 tl2
@@ -4188,13 +4208,14 @@ let rec eqtype rename type_pairs subst env t1 t2 =
           match (get_desc t1', get_desc t2') with
             (Tvar _, Tvar _) when rename ->
               eqtype_subst type_pairs subst t1' t2'
-          | (Tarrow ((l1,a1,r1), t1, u1, _),
-             Tarrow ((l2,a2,r2), t2, u2, _)) when
+          | (Tarrow ((l1,a1,m1,r1), t1, u1, _),
+             Tarrow ((l2,a2,m2,r2), t2, u2, _)) when
                (l1 = l2
                 || !Clflags.classic && not (is_optional l1 || is_optional l2)) ->
               eqtype rename type_pairs subst env t1 t2;
               eqtype rename type_pairs subst env u1 u2;
               eqtype_alloc_mode a1 a2;
+              eqtype_uniqueness_mode m1 m2;
               eqtype_alloc_mode r1 r2
           | (Ttuple tl1, Ttuple tl2) ->
               eqtype_list rename type_pairs subst env tl1 tl2
@@ -4360,6 +4381,9 @@ and eqtype_row rename type_pairs subst env row1 row2 =
 and eqtype_alloc_mode m1 m2 =
   (* FIXME implement properly *)
   unify_alloc_mode_for Equality m1 m2
+and eqtype_uniqueness_mode m1 m2 =
+  (* FIXME implement properly *)
+  unify_uniqueness_mode_for Equality m1 m2
 
 (* Must empty univar_pairs first *)
 let eqtype_list rename type_pairs subst env tl1 tl2 =
@@ -4711,11 +4735,22 @@ let has_constr_row' env t =
 
 let build_submode posi m =
   if posi then begin
-    let m', changed = Alloc_mode.newvar_below m in
+    let m', changed = Mode.Alloc.newvar_below m in
     let c = if changed then Changed else Unchanged in
     m', c
   end else begin
-    let m', changed = Alloc_mode.newvar_above m in
+    let m', changed = Mode.Alloc.newvar_above m in
+    let c = if changed then Changed else Unchanged in
+    m', c
+  end
+
+let build_uniqueness_submode posi m =
+  if posi then begin
+    let m', changed = Mode.Uniqueness.newvar_below m in
+    let c = if changed then Changed else Unchanged in
+    m', c
+  end else begin
+    let m', changed = Mode.Uniqueness.newvar_above m in
     let c = if changed then Changed else Unchanged in
     m', c
   end
@@ -4733,7 +4768,7 @@ let rec build_subtype env (visited : transient_expr list)
           (t, Unchanged)
       else
         (t, Unchanged)
-  | Tarrow((l,a,r), t1, t2, _) ->
+  | Tarrow((l,a,m,r), t1, t2, _) ->
       let tt = Transient_expr.repr t in
       if memq_warn tt visited then (t, Unchanged) else
       let visited = tt :: visited in
@@ -4742,12 +4777,15 @@ let rec build_subtype env (visited : transient_expr list)
       let (a', c3) =
         if level > 2 then build_submode (not posi) a else a, Unchanged
       in
-      let (r', c4) =
+      let (m', c4) =
+        if level > 2 then build_uniqueness_submode (not posi) m else m, Unchanged
+      in
+      let (r', c5) =
         if level > 2 then build_submode posi r else r, Unchanged
       in
-      let c = max_change c1 (max_change c2 (max_change c3 c4)) in
+      let c = max_change c1 (max_change c2 (max_change c3 (max_change c4 c5))) in
       if c > Unchanged
-      then (newty (Tarrow((l,a',r'), t1', t2', commu_ok)), c)
+      then (newty (Tarrow((l,a',m',r'), t1', t2', commu_ok)), c)
       else (t, Unchanged)
   | Ttuple tlist ->
       let tt = Transient_expr.repr t in
@@ -4925,9 +4963,14 @@ let subtype_error ~env ~trace ~unification_trace =
                     ~unification_trace))
 
 let subtype_alloc_mode env trace a1 a2 =
-  match Alloc_mode.submode a1 a2 with
+  match Mode.Alloc.submode a1 a2 with
   | Ok () -> ()
-  | Error () -> subtype_error ~env ~trace ~unification_trace:[]
+  | Error _ -> subtype_error ~env ~trace ~unification_trace:[]
+
+let subtype_uniqueness_mode env trace a1 a2 =
+  match Mode.Uniqueness.submode a1 a2 with
+  | Ok () -> ()
+  | Error _e -> subtype_error ~env ~trace ~unification_trace:[]
 
 let rec subtype_rec env trace t1 t2 cstrs =
   if eq_type t1 t2 then cstrs else
@@ -4939,8 +4982,8 @@ let rec subtype_rec env trace t1 t2 cstrs =
     match (get_desc t1, get_desc t2) with
       (Tvar _, _) | (_, Tvar _) ->
         (trace, t1, t2, !univar_pairs)::cstrs
-    | (Tarrow((l1,a1,r1), t1, u1, _),
-       Tarrow((l2,a2,r2), t2, u2, _)) when l1 = l2
+    | (Tarrow((l1,a1,m1,r1), t1, u1, _),
+       Tarrow((l2,a2,m2,r2), t2, u2, _)) when l1 = l2
       || !Clflags.classic && not (is_optional l1 || is_optional l2) ->
         let cstrs =
           subtype_rec
@@ -4950,6 +4993,7 @@ let rec subtype_rec env trace t1 t2 cstrs =
             cstrs
         in
         subtype_alloc_mode env trace a2 a1;
+        subtype_uniqueness_mode env trace m2 m1;
         subtype_alloc_mode env trace r1 r2;
         subtype_rec
           env

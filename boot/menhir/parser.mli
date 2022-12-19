@@ -7,6 +7,7 @@ type token =
   | WHEN
   | VIRTUAL
   | VAL
+  | UNIQUE
   | UNDERSCORE
   | UIDENT of (string)
   | TYPE
@@ -116,10 +117,12 @@ type token =
   | COLON
   | CLASS
   | CHAR of (char)
+  | BORROW
   | BEGIN
   | BARRBRACKET
   | BARBAR
   | BAR
+  | BANGMINUSGREATER
   | BANG
   | BACKQUOTE
   | ASSERT

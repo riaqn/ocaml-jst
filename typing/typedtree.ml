@@ -105,14 +105,14 @@ and fun_curry_state =
 
 and expression_desc =
     Texp_ident of
-      Path.t * Longident.t loc * Types.value_description * ident_kind
+      Path.t * Longident.t loc * Types.value_description * ident_kind * unique_use
   | Texp_constant of constant
-  | Texp_let of rec_flag * value_binding list * expression
+  | Texp_let of rec_flag * value_binding list * expression * borrow_ctx
   | Texp_function of { arg_label : arg_label; param : Ident.t;
       cases : value case list; partial : partial;
       region : bool; curry : fun_curry_state;
       warnings : Warnings.state; }
-  | Texp_apply of expression * (arg_label * apply_arg) list * apply_position
+  | Texp_apply of expression * (arg_label * apply_arg) list * apply_position * borrow_ctx
   | Texp_match of expression * computation case list * partial
   | Texp_try of expression * value case list
   | Texp_tuple of expression list
@@ -122,9 +122,9 @@ and expression_desc =
   | Texp_record of {
       fields : ( Types.label_description * record_label_definition ) array;
       representation : Types.record_representation;
-      extended_expression : expression option;
+      extended_expression : (update_kind * expression) option;
     }
-  | Texp_field of expression * Longident.t loc * label_description
+  | Texp_field of expression * Longident.t loc * label_description * unique_use
   | Texp_setfield of
       expression * Longident.t loc * label_description * expression
   | Texp_array of expression list
@@ -179,6 +179,13 @@ and expression_desc =
 
 and ident_kind = Id_value | Id_prim of Types.alloc_mode option
 
+and borrow_ctx = Mode.Value.t option
+
+and unique_use =
+  { mode: Mode.Uniqueness.t;
+    is_borrowed: bool;
+  }
+
 and meth =
   | Tmeth_name of string
   | Tmeth_val of Ident.t
@@ -205,6 +212,10 @@ and 'k case =
 and record_label_definition =
   | Kept of Types.type_expr
   | Overridden of Longident.t loc * expression
+
+and update_kind =
+  | Create_new
+  | In_place
 
 and binding_op =
   {
@@ -504,7 +515,7 @@ and core_type =
 and core_type_desc =
     Ttyp_any
   | Ttyp_var of string
-  | Ttyp_arrow of arg_label * core_type * core_type
+  | Ttyp_arrow of arg_label * call_count * core_type * core_type
   | Ttyp_tuple of core_type list
   | Ttyp_constr of Path.t * Longident.t loc * core_type list
   | Ttyp_object of object_field list * closed_flag

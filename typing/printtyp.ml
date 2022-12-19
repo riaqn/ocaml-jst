@@ -522,9 +522,9 @@ let rec raw_type ppf ty =
 and raw_type_list tl = raw_list raw_type tl
 and raw_type_desc ppf = function
     Tvar name -> fprintf ppf "Tvar %a" print_name name
-  | Tarrow((l,arg,ret),t1,t2,c) ->
-      fprintf ppf "@[<hov1>Tarrow((\"%s\",%a,%a),@,%a,@,%a,@,%s)@]"
-        (string_of_label l) Alloc_mode.print arg Alloc_mode.print ret
+  | Tarrow((l,arg,arr,ret),t1,t2,c) ->
+      fprintf ppf "@[<hov1>Tarrow((\"%s\",%a,%a,%a),@,%a,@,%a,@,%s)@]"
+        (string_of_label l) Mode.Alloc.print arg Mode.Uniqueness.print arr Mode.Alloc.print ret
         raw_type t1 raw_type t2
         (if is_commu_ok c then "Cok" else "Cunknown")
   | Ttuple tl ->
@@ -1089,6 +1089,25 @@ let prepare_for_printing tyl =
 (* Disabled in classic mode when printing an unification error *)
 let print_labels = ref true
 
+let tree_of_uniqueness mode =
+  let uniqueness = Mode.Uniqueness.check_const mode in
+  match uniqueness with
+    | Some Unique -> Oum_unique
+    | Some Shared -> Oum_shared
+    | None -> Oum_unknown
+
+let tree_of_mode mode =
+  let locality, uniqueness = Mode.Alloc.check_const mode in
+  let locality = match locality with
+    | Some Global -> Olm_global
+    | Some Local -> Olm_local
+    | None -> Olm_unknown in
+  let uniqueness = match uniqueness with
+    | Some Unique -> Oum_unique
+    | Some Shared -> Oum_shared
+    | None -> Oum_unknown in
+  locality, uniqueness
+
 let rec tree_of_typexp mode ty =
   let px = proxy ty in
   if List.memq px !printed_aliases && not (List.memq px !delayed) then
@@ -1106,7 +1125,7 @@ let rec tree_of_typexp mode ty =
         let non_gen = is_non_gen mode ty in
         let name_gen = if non_gen then Names.new_weak_name ty else Names.new_name in
         Otyp_var (non_gen, Names.name_of_type name_gen tty)
-    | Tarrow ((l, marg, mret), ty1, ty2, _) ->
+    | Tarrow ((l, marg, marr, mret), ty1, ty2, _) ->
         let lab =
           if !print_labels || is_optional l then string_of_label l else ""
         in
@@ -1118,20 +1137,11 @@ let rec tree_of_typexp mode ty =
                 tree_of_typexp mode ty
             | _ -> Otyp_stuff "<hidden>"
           else tree_of_typexp mode ty1 in
-        let am =
-          match Alloc_mode.check_const marg with
-          | Some Global -> Oam_global
-          | Some Local -> Oam_local
-          | None -> Oam_unknown
-        in
+        let am = tree_of_mode marg in
+        let arrm = tree_of_uniqueness marr in
         let t2 = tree_of_typexp mode ty2 in
-        let rm =
-          match Alloc_mode.check_const mret with
-          | Some Global -> Oam_global
-          | Some Local -> Oam_local
-          | None -> Oam_unknown
-        in
-        Otyp_arrow (lab, am, t1, rm, t2)
+        let rm = tree_of_mode mret in
+        Otyp_arrow (lab, am, t1, arrm, rm, t2)
     | Ttuple tyl ->
         Otyp_tuple (tree_of_typlist mode tyl)
     | Tconstr(p, tyl, _abbrev) ->

@@ -114,7 +114,7 @@ let preserve_tailcall_for_prim = function
       true
   | Pbytes_to_string | Pbytes_of_string | Pignore
   | Pgetglobal _ | Psetglobal _ | Pgetpredef _
-  | Pmakeblock _ | Pmakefloatblock _
+  | Pmakeblock _ | Preuseblock _ | Pmakefloatblock _ | Preusefloatblock _
   | Pfield _ | Pfield_computed _ | Psetfield _
   | Psetfield_computed _ | Pfloatfield _ | Psetfloatfield _ | Pduprecord _
   | Pccall _ | Praise _ | Pnot | Pnegint | Paddint | Psubint | Pmulint
@@ -211,10 +211,13 @@ let rec size_of_lambda env = function
       in
       size_of_lambda env body
   | Lprim(Pmakeblock _, args, _) -> RHS_block (List.length args)
+  | Lprim(Preuseblock _, _ :: args, _) -> RHS_block (List.length args)
   | Lprim (Pmakearray ((Paddrarray|Pintarray), _, _), args, _) ->
       RHS_block (List.length args)
   | Lprim (Pmakearray (Pfloatarray, _, _), args, _)
   | Lprim (Pmakefloatblock _, args, _) ->
+      RHS_floatblock (List.length args)
+  | Lprim (Preusefloatblock _, _ :: args, _) ->
       RHS_floatblock (List.length args)
   | Lprim (Pmakearray (Pgenarray, _, _), _, _) ->
      (* Pgenarray is excluded from recursive bindings by the
@@ -529,6 +532,8 @@ let comp_primitive p args =
   | Pfloatcomp _
   | Pmakeblock _
   | Pmakefloatblock _
+  | Preuseblock _ 
+  | Preusefloatblock _
   | Pprobe_is_enabled _
     ->
       fatal_error "Bytegen.comp_primitive"
@@ -759,6 +764,9 @@ let rec comp_expr env exp sz cont =
   | Lprim (Pmakefloatblock _, args, loc) ->
       let cont = add_pseudo_event loc !compunit_name cont in
       comp_args env args sz (Kmakefloatblock (List.length args) :: cont)
+  | Lprim (Preusefloatblock _, _ :: args, loc) ->
+      let cont = add_pseudo_event loc !compunit_name cont in
+      comp_args env args sz (Kmakefloatblock (List.length args) :: cont)
   | Lprim(Pmakearray (kind, _, _), args, loc) ->
       let cont = add_pseudo_event loc !compunit_name cont in
       begin match kind with
@@ -773,7 +781,7 @@ let rec comp_expr env exp sz cont =
                  (Kmakeblock(List.length args, 0) ::
                   Kccall("caml_make_array", 1) :: cont)
       end
-  | Lprim (Pduparray (kind, mutability),
+  | Lprim (Pduparray (kind, mutability, _),
            [Lprim (Pmakearray (kind',_,m),args,_)], loc) ->
       assert (kind = kind');
       comp_expr env (Lprim (Pmakearray (kind, mutability, m), args, loc)) sz cont
@@ -805,6 +813,9 @@ let rec comp_expr env exp sz cont =
       in
       comp_args env args sz cont
   | Lprim(Pmakeblock(tag, _mut, _, _), args, loc) ->
+      let cont = add_pseudo_event loc !compunit_name cont in
+      comp_args env args sz (Kmakeblock(List.length args, tag) :: cont)
+  | Lprim(Preuseblock(tag, _mut, _, _), _ :: args, loc) ->
       let cont = add_pseudo_event loc !compunit_name cont in
       comp_args env args sz (Kmakeblock(List.length args, tag) :: cont)
   | Lprim(Pfloatfield (n, _, _), args, loc) ->

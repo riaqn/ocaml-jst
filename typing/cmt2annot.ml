@@ -72,7 +72,7 @@ let rec iterator ~scope rebuild_env =
 
   and expr sub exp =
     begin match exp.exp_desc with
-    | Texp_ident (path, _, _, _) ->
+    | Texp_ident (path, _, _, _, _) ->
         let full_name = Path.name ~paren:Oprint.parenthesized_ident path in
         let env =
           if rebuild_env then
@@ -91,9 +91,9 @@ let rec iterator ~scope rebuild_env =
         in
         Stypes.record
           (Stypes.An_ident (exp.exp_loc, full_name , annot))
-    | Texp_let (Recursive, bindings, _) ->
+    | Texp_let (Recursive, bindings, _, _) ->
         bind_bindings exp.exp_loc bindings
-    | Texp_let (Nonrecursive, bindings, body) ->
+    | Texp_let (Nonrecursive, bindings, body, _) ->
         bind_bindings body.exp_loc bindings
     | Texp_match (_, f1, _) ->
         bind_cases f1

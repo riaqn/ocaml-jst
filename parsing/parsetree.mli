@@ -87,8 +87,8 @@ and core_type =
 and core_type_desc =
   | Ptyp_any  (** [_] *)
   | Ptyp_var of string  (** A type variable such as ['a] *)
-  | Ptyp_arrow of arg_label * core_type * core_type
-      (** [Ptyp_arrow(lbl, T1, T2)] represents:
+  | Ptyp_arrow of arg_label * call_count * core_type * core_type
+      (** [Ptyp_arrow(lbl, _, T1, T2)] represents:
             - [T1 -> T2]    when [lbl] is
                                      {{!Asttypes.arg_label.Nolabel}[Nolabel]},
             - [~l:T1 -> T2] when [lbl] is

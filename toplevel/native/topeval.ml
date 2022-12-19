@@ -139,7 +139,7 @@ let name_expression ~loc ~attrs exp =
        pat_extra = [];
        pat_type = exp.exp_type;
        pat_env = exp.exp_env;
-       pat_mode = Value_mode.global;
+       pat_mode = Mode.Value.global;
        pat_attributes = []; }
    in
    let vb =

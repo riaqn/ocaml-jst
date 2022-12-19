@@ -43,6 +43,7 @@ let keyword_table =
     "as", AS;
     "assert", ASSERT;
     "begin", BEGIN;
+    "borrow_", BORROW;
     "class", CLASS;
     "constraint", CONSTRAINT;
     "do", DO;
@@ -87,6 +88,7 @@ let keyword_table =
     "true", TRUE;
     "try", TRY;
     "type", TYPE;
+    "unique_", UNIQUE;
     "val", VAL;
     "virtual", VIRTUAL;
     "when", WHEN;
@@ -565,6 +567,7 @@ rule token = parse
   | "[%%"  { LBRACKETPERCENTPERCENT }
   | "!"  { BANG }
   | "!=" { INFIXOP0 "!=" }
+  | "!->" { BANGMINUSGREATER }
   | "+"  { PLUS }
   | "+." { PLUSDOT }
   | "+=" { PLUSEQ }

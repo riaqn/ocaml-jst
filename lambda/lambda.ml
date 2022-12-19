@@ -41,32 +41,61 @@ type field_read_semantics =
   | Reads_vary
 
 include (struct
-
-  type alloc_mode =
+  type locality_mode =
     | Alloc_heap
     | Alloc_local
 
+  type uniqueness_mode =
+    | Alloc_unique
+    | Alloc_shared
+
+  type alloc_mode = locality_mode * uniqueness_mode
+
   let alloc_heap = Alloc_heap
 
-  let alloc_local : alloc_mode =
+  let alloc_local : locality_mode =
     if Config.stack_allocation then Alloc_local
-    else Alloc_heap
+    else alloc_heap
 
-  let join_mode a b =
+  let alloc_heap_unique = alloc_heap, Alloc_unique
+  let alloc_heap_shared = alloc_heap, Alloc_shared
+  let alloc_local_unique = alloc_local, Alloc_unique
+  let alloc_local_shared = alloc_local, Alloc_shared
+
+  let join_locality_mode a b =
     match a, b with
     | Alloc_local, _ | _, Alloc_local -> Alloc_local
     | Alloc_heap, Alloc_heap -> Alloc_heap
 
-end : sig
+  let join_uniqueness_mode a b =
+    match a, b with
+    | Alloc_shared, _ | _, Alloc_shared -> Alloc_shared
+    | Alloc_unique, Alloc_unique -> Alloc_unique
 
-  type alloc_mode = private
+  let join_mode (al, au) (bl, bu) =
+    join_locality_mode al bl, join_uniqueness_mode au bu
+
+end : sig
+  type locality_mode = private
     | Alloc_heap
     | Alloc_local
 
-  val alloc_heap : alloc_mode
+  type uniqueness_mode = private
+    | Alloc_unique
+    | Alloc_shared
 
-  val alloc_local : alloc_mode
+  type alloc_mode = locality_mode * uniqueness_mode
 
+  val alloc_heap : locality_mode
+
+  val alloc_local : locality_mode
+
+  val alloc_heap_unique : alloc_mode
+  val alloc_heap_shared : alloc_mode
+  val alloc_local_unique : alloc_mode
+  val alloc_local_shared : alloc_mode
+
+  val join_locality_mode : locality_mode -> locality_mode -> locality_mode
   val join_mode : alloc_mode -> alloc_mode -> alloc_mode
 
 end)
@@ -79,21 +108,40 @@ let is_heap_mode = function
   | Alloc_heap -> true
   | Alloc_local -> false
 
-let sub_mode a b =
+let sub_mode_locality a b =
   match a, b with
   | Alloc_heap, _ -> true
   | _, Alloc_local -> true
   | Alloc_local, Alloc_heap -> false
 
-let eq_mode a b =
+let sub_mode_uniqueness a b =
+  match a, b with
+  | Alloc_unique, _ -> true
+  | _, Alloc_shared -> true
+  | Alloc_shared, Alloc_unique -> false
+
+let sub_mode (al, au) (bl, bu) =
+  sub_mode_locality al bl && sub_mode_uniqueness au bu
+
+let eq_mode_locality a b =
   match a, b with
   | Alloc_heap, Alloc_heap -> true
   | Alloc_local, Alloc_local -> true
   | Alloc_heap, Alloc_local -> false
   | Alloc_local, Alloc_heap -> false
 
+let eq_mode_uniqueness a b =
+  match a, b with
+  | Alloc_unique, Alloc_unique -> true
+  | Alloc_shared, Alloc_shared -> true
+  | Alloc_unique, Alloc_shared -> false
+  | Alloc_shared, Alloc_unique -> false
+
+let eq_mode (al, au) (bl, bu) =
+  eq_mode_locality al bl && eq_mode_uniqueness au bu
+
 type initialization_or_assignment =
-  | Assignment of alloc_mode
+  | Assignment of locality_mode
   | Heap_initialization
   | Root_initialization
 
@@ -112,7 +160,9 @@ type primitive =
   | Pgetpredef of Ident.t
   (* Operations on heap blocks *)
   | Pmakeblock of int * mutable_flag * block_shape * alloc_mode
+  | Preuseblock of int * mutable_flag * reuse_status list * alloc_mode
   | Pmakefloatblock of mutable_flag * alloc_mode
+  | Preusefloatblock of mutable_flag * reuse_status list * alloc_mode
   | Pfield of int * field_read_semantics
   | Pfield_computed of field_read_semantics
   | Psetfield of int * immediate_or_pointer * initialization_or_assignment
@@ -147,7 +197,7 @@ type primitive =
   | Pbyteslength | Pbytesrefu | Pbytessetu | Pbytesrefs | Pbytessets
   (* Array operations *)
   | Pmakearray of array_kind * mutable_flag * alloc_mode
-  | Pduparray of array_kind * mutable_flag
+  | Pduparray of array_kind * mutable_flag * alloc_mode
   | Parraylength of array_kind
   | Parrayrefu of array_kind
   | Parraysetu of array_kind
@@ -230,6 +280,10 @@ and value_kind =
 and block_shape =
   value_kind list option
 
+and reuse_status =
+  | Reuse_set of value_kind
+  | Reuse_keep
+
 and array_kind =
     Pgenarray | Paddrarray | Pintarray | Pfloatarray
 
@@ -254,6 +308,13 @@ and raise_kind =
   | Raise_regular
   | Raise_reraise
   | Raise_notrace
+
+(* For setting fields in reused (regular) blocks. We do not mark floats
+   as immediates as we handle float blocks specially. *)
+let immediate_or_pointer_of_value_kind v =
+  match v with
+  | Pintval -> Immediate
+  | _ -> Pointer
 
 let equal_boxed_integer = Primitive.equal_boxed_integer
 
@@ -433,7 +494,7 @@ type lambda =
   | Lassign of Ident.t * lambda
   | Lsend of
       meth_kind * lambda * lambda * lambda list
-      * region_close * alloc_mode * scoped_location
+      * region_close * locality_mode * scoped_location
   | Levent of lambda * lambda_event
   | Lifused of Ident.t * lambda
   | Lregion of lambda
@@ -445,7 +506,7 @@ and lfunction =
     body: lambda;
     attr: function_attribute; (* specified with [@inline] attribute *)
     loc: scoped_location;
-    mode: alloc_mode;
+    mode: locality_mode;
     region: bool; }
 
 and lambda_while =
@@ -468,7 +529,7 @@ and lambda_apply =
   { ap_func : lambda;
     ap_args : lambda list;
     ap_region_close : region_close;
-    ap_mode : alloc_mode;
+    ap_mode : locality_mode;
     ap_loc : scoped_location;
     ap_tailcall : tailcall_attribute;
     ap_inlined : inlined_attribute;
@@ -1210,20 +1271,22 @@ let mod_field ?(read_semantics=Reads_agree) pos =
 let mod_setfield pos =
   Psetfield (pos, Pointer, Root_initialization)
 
-let primitive_may_allocate : primitive -> alloc_mode option = function
+let primitive_may_allocate : primitive -> locality_mode option = function
   | Pbytes_to_string | Pbytes_of_string | Pignore -> None
   | Pgetglobal _ | Psetglobal _ | Pgetpredef _ -> None
-  | Pmakeblock (_, _, _, m) -> Some m
-  | Pmakefloatblock (_, m) -> Some m
+  | Pmakeblock (_, _, _, m) -> Some (fst m)
+  | Preuseblock _ -> None
+  | Pmakefloatblock (_, m) -> Some (fst m)
+  | Preusefloatblock _ -> None
   | Pfield _ | Pfield_computed _ | Psetfield _ | Psetfield_computed _ -> None
-  | Pfloatfield (_, _, m) -> Some m
+  | Pfloatfield (_, _, m) -> Some (fst m)
   | Psetfloatfield _ -> None
   | Pduprecord _ -> Some alloc_heap
   | Pccall p ->
      if not p.prim_alloc then None
      else begin match p.prim_native_repr_res with
        | (Prim_local|Prim_poly), _ -> Some alloc_local
-       | Prim_global, _ -> Some alloc_heap
+       | (Prim_global), _ -> Some alloc_heap
      end
   | Praise _ -> None
   | Psequor | Psequand | Pnot
@@ -1236,14 +1299,14 @@ let primitive_may_allocate : primitive -> alloc_mode option = function
   | Poffsetint _
   | Poffsetref _ -> None
   | Pintoffloat -> None
-  | Pfloatofint m -> Some m
+  | Pfloatofint m -> Some (fst m)
   | Pnegfloat m | Pabsfloat m
   | Paddfloat m | Psubfloat m
-  | Pmulfloat m | Pdivfloat m -> Some m
+  | Pmulfloat m | Pdivfloat m -> Some (fst m)
   | Pfloatcomp _ -> None
   | Pstringlength | Pstringrefu  | Pstringrefs
   | Pbyteslength | Pbytesrefu | Pbytessetu | Pbytesrefs | Pbytessets -> None
-  | Pmakearray (_, _, m) -> Some m
+  | Pmakearray (_, _, m) -> Some (fst m)
   | Pduparray _ -> Some alloc_heap
   | Parraylength _ -> None
   | Parraysetu _ | Parraysets _
@@ -1268,7 +1331,7 @@ let primitive_may_allocate : primitive -> alloc_mode option = function
   | Pxorbint (_, m)
   | Plslbint (_, m)
   | Plsrbint (_, m)
-  | Pasrbint (_, m) -> Some m
+  | Pasrbint (_, m) -> Some (fst m)
   | Pbintcomp _ -> None
   | Pbigarrayset _ | Pbigarraydim _ -> None
   | Pbigarrayref (_, _, _, _) ->
@@ -1276,14 +1339,14 @@ let primitive_may_allocate : primitive -> alloc_mode option = function
      Some alloc_heap
   | Pstring_load_16 _ | Pbytes_load_16 _ -> None
   | Pstring_load_32 (_, m) | Pbytes_load_32 (_, m)
-  | Pstring_load_64 (_, m) | Pbytes_load_64 (_, m) -> Some m
+  | Pstring_load_64 (_, m) | Pbytes_load_64 (_, m) -> Some (fst m)
   | Pbytes_set_16 _ | Pbytes_set_32 _ | Pbytes_set_64 _ -> None
   | Pbigstring_load_16 _ -> None
-  | Pbigstring_load_32 (_,m) | Pbigstring_load_64 (_,m) -> Some m
+  | Pbigstring_load_32 (_,m) | Pbigstring_load_64 (_,m) -> Some (fst m)
   | Pbigstring_set_16 _ | Pbigstring_set_32 _ | Pbigstring_set_64 _ -> None
   | Pctconst _ -> None
   | Pbswap16 -> None
-  | Pbbswap (_, m) -> Some m
+  | Pbbswap (_, m) -> Some (fst m)
   | Pint_as_pointer -> None
   | Popaque -> None
   | Pprobe_is_enabled _ -> None

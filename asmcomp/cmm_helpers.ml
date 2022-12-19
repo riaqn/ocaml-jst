@@ -101,9 +101,9 @@ let alloc_float_header mode dbg =
   | Lambda.Alloc_local -> Cconst_natint (float_local_header, dbg)
 let alloc_floatarray_header len dbg = Cconst_natint (floatarray_header len, dbg)
 let alloc_closure_header ~mode sz dbg =
-  match (mode : Lambda.alloc_mode) with
-  | Alloc_heap -> Cconst_natint (white_closure_header sz, dbg)
-  | Alloc_local -> Cconst_natint (local_closure_header sz, dbg)
+  match mode with
+  | Lambda.Alloc_heap -> Cconst_natint (white_closure_header sz, dbg)
+  | Lambda.Alloc_local -> Cconst_natint (local_closure_header sz, dbg)
 let alloc_infix_header ofs dbg = Cconst_natint (infix_header ofs, dbg)
 let alloc_closure_info ~arity ~startenv ~is_last dbg =
   Cconst_natint (closure_info ~arity ~startenv ~is_last, dbg)
@@ -821,8 +821,10 @@ let lookup_label obj lab dbg =
     let table = Cop (Cload (Word_val, Mutable), [obj], dbg) in
     addr_array_ref table lab dbg)
 
-let send_function_name n (mode : Lambda.alloc_mode) =
-  let suff = match mode with Alloc_heap -> "" | Alloc_local -> "L" in
+let send_function_name n (mode : Lambda.locality_mode) =
+  let suff = match mode with
+    | Alloc_heap -> ""
+    | Alloc_local -> "L" in
   "caml_send" ^ Int.to_string n ^ suff
 
 let call_cached_method obj tag cache pos args (apos,mode) dbg =
@@ -877,8 +879,10 @@ let make_checkbound dbg = function
       Cop(Ccheckbound, args, dbg)
 
 (* Record application and currying functions *)
-let apply_function_name (n, (mode : Lambda.alloc_mode)) =
-  let suff = match mode with Alloc_heap -> "" | Alloc_local -> "L" in
+let apply_function_name (n, (mode : Lambda.locality_mode)) =
+  let suff = match mode with
+    | Alloc_heap -> ""
+    | Alloc_local -> "L" in
   "caml_apply" ^ Int.to_string n ^ suff
 let apply_function_sym n mode =
   assert (n > 0);
@@ -1902,7 +1906,7 @@ let placeholder_fun_dbg ~human_name:_ = Debuginfo.none
            (app closN-1.code aN closN-1))))
 *)
 
-let apply_function_body (arity, (mode : Lambda.alloc_mode)) =
+let apply_function_body (arity, (mode : Lambda.locality_mode)) =
   let dbg = placeholder_dbg in
   let arg = Array.make arity (V.create_local "arg") in
   for i = 1 to arity - 1 do arg.(i) <- V.create_local "arg" done;
@@ -2235,11 +2239,11 @@ let curry_function = function
      intermediate_curry_functions ~nlocal ~arity:n 0
 
 module ApplyFnSet =
-  Set.Make (struct type t = int * Lambda.alloc_mode let compare = compare end)
+  Set.Make (struct type t = int * Lambda.locality_mode let compare = compare end)
 module AritySet =
   Set.Make (struct type t = Clambda.arity let compare = compare end)
 
-let default_apply = ApplyFnSet.of_list [2,Lambda.alloc_heap; 3,Lambda.alloc_heap]
+let default_apply = ApplyFnSet.of_list [2, Lambda.alloc_heap; 3, Lambda.alloc_heap]
   (* These apply funs are always present in the main program because
      the run-time system needs them (cf. runtime/<arch>.S) . *)
 

@@ -104,6 +104,7 @@ COMPILERLIBS_SOURCES=\
   typing/shape.ml \
   typing/types.ml \
   typing/btype.ml \
+  typing/mode.ml \
   typing/subst.ml \
   typing/predef.ml \
   typing/datarepr.ml \

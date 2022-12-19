@@ -257,6 +257,7 @@ Ptop_def
               core_type (//toplevel//[2,1+16]..[2,1+22])
                 Ptyp_arrow
                 Nolabel
+                Call_many
                 core_type (//toplevel//[2,1+16]..[2,1+17])
                   Ptyp_var a
                 core_type (//toplevel//[2,1+21]..[2,1+22])
@@ -276,6 +277,7 @@ Ptop_def
               core_type (//toplevel//[2,1+16]..[2,1+22])
                 Ptyp_arrow
                 Nolabel
+                Call_many
                 core_type (//toplevel//[2,1+16]..[2,1+17])
                   Ptyp_constr "a" (//toplevel//[2,1+16]..[2,1+17])
                   []
@@ -321,6 +323,7 @@ Ptop_def
                           core_type (//toplevel//[3,16+21]..[3,16+27])
                             Ptyp_arrow
                             Nolabel
+                            Call_many
                             core_type (//toplevel//[3,16+21]..[3,16+22])
                               Ptyp_constr "a" (//toplevel//[3,16+21]..[3,16+22])
                               []
@@ -333,6 +336,7 @@ Ptop_def
                           core_type (//toplevel//[3,16+21]..[3,16+27])
                             Ptyp_arrow
                             Nolabel
+                            Call_many
                             core_type (//toplevel//[3,16+21]..[3,16+22])
                               Ptyp_var a
                             core_type (//toplevel//[3,16+26]..[3,16+27])

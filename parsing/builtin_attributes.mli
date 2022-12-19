@@ -145,3 +145,5 @@ val tailcall : Parsetree.attributes ->
     ([`Tail|`Nontail|`Tail_if_possible] option, [`Conflict]) result
 val has_include_functor : Parsetree.attributes -> (bool,unit) result
 
+val has_unique: Parsetree.attributes -> (bool,unit) result
+
