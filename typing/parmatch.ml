@@ -37,7 +37,7 @@ let omega_list = Patterns.omega_list
 let extra_pat =
   make_pat
     (Tpat_var (Ident.create_local "+", mknoloc "+"))
-    Ctype.none Value_mode.max_mode Env.empty
+    Ctype.none Mode.Value.max_mode Env.empty
 
 
 (*******************)
@@ -709,7 +709,7 @@ let set_last a =
 (* mark constructor lines for failure when they are incomplete *)
 let mark_partial =
   let zero =
-    make_pat (`Constant (Const_int 0)) Ctype.none Value_mode.max_mode Env.empty
+    make_pat (`Constant (Const_int 0)) Ctype.none Mode.Value.max_mode Env.empty
   in
   List.map (fun ((hp, _), _ as ps) ->
     match hp.pat_desc with
@@ -924,7 +924,7 @@ let build_other ext env =
           make_pat
             (Tpat_var (Ident.create_local "*extension*",
                        {txt="*extension*"; loc = d.pat_loc}))
-            Ctype.none Value_mode.max_mode Env.empty
+            Ctype.none Mode.Value.max_mode Env.empty
       | Construct _ ->
           begin match ext with
           | Some ext ->
@@ -1934,7 +1934,7 @@ type ppat_of_type =
       (string, label_description) Hashtbl.t
 
 let ppat_of_type env ty =
-  match pats_of_type env ty Value_mode.max_mode with
+  match pats_of_type env ty Mode.Value.max_mode with
   | [] -> PT_empty
   | [{pat_desc = Tpat_any}] -> PT_any
   | [pat] ->
@@ -2285,7 +2285,7 @@ let simplify_head_amb_pat head_bound_variables varsets ~add_column p ps k =
     match (Patterns.General.view p).pat_desc with
     | `Alias (p,x,_) ->
       simpl (Ident.Set.add x head_bound_variables) varsets p ps k
-    | `Var (x, _) ->
+    | `Var (x,_) ->
       simpl (Ident.Set.add x head_bound_variables) varsets Patterns.omega ps k
     | `Or (p1,p2,_) ->
       simpl head_bound_variables varsets p1 ps
@@ -2440,7 +2440,7 @@ let all_rhs_idents exp =
   let open Tast_iterator in
   let expr_iter iter exp =
     (match exp.exp_desc with
-      | Texp_ident (path, _lid, _descr, _kind) ->
+      | Texp_ident (path, _lid, _descr, _kind, _mode) ->
         List.iter (fun id -> ids := Ident.Set.add id !ids) (Path.heads path)
       (* Use default iterator methods for rest of match.*)
       | _ -> Tast_iterator.default_iterator.expr iter exp);
@@ -2449,7 +2449,7 @@ let all_rhs_idents exp =
     | Texp_letmodule
         (id_mod,_,_,
          {mod_desc=
-          Tmod_unpack ({exp_desc=Texp_ident (Path.Pident id_exp,_,_,_)},_)},
+          Tmod_unpack ({exp_desc=Texp_ident (Path.Pident id_exp,_,_,_,_)},_)},
          _) ->
            assert (Ident.Set.mem id_exp !ids) ;
            begin match id_mod with

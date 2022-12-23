@@ -47,6 +47,7 @@ type error =
   | Opened_object of Path.t option
   | Not_an_object of type_expr
   | Local_not_enabled
+  | Unique_not_enabled
 
 exception Error of Location.t * Env.t * error
 exception Error_forward of Location.error
@@ -157,11 +158,22 @@ let transl_type_param env styp =
     (fun () -> transl_type_param env styp)
 
 let get_alloc_mode styp =
-  match Builtin_attributes.has_local styp.ptyp_attributes with
-  | Ok true -> Alloc_mode.Local
-  | Ok false -> Alloc_mode.Global
-  | Error () ->
-     raise (Error(styp.ptyp_loc, Env.empty, Local_not_enabled))
+  let locality = match Builtin_attributes.has_local styp.ptyp_attributes with
+    | Ok true -> Mode.Locality.Local
+    | Ok false -> Mode.Locality.Global
+    | Error () ->
+      raise (Error(styp.ptyp_loc, Env.empty, Local_not_enabled))
+  and uniqueness = match Builtin_attributes.has_unique styp.ptyp_attributes with
+    | Ok true -> Mode.Uniqueness.Unique
+    | Ok false -> Mode.Uniqueness.Shared
+    | Error () ->
+      raise (Error(styp.ptyp_loc, Env.empty, Unique_not_enabled))
+  and linearity = match Builtin_attributes.has_once styp.ptyp_attributes with
+    | Ok true -> Mode.Linearity.Once
+    | Ok false -> Mode.Linearity.Many
+    | Error () -> 
+      raise (Error(styp.ptyp_loc, Env.empty, Unique_not_enabled))
+  in { Mode.locality = locality; uniqueness; linearity }
 
 let rec extract_params styp =
   let final styp =
@@ -208,11 +220,11 @@ let instance_poly_univars env loc vars =
 
 type policy = Fixed | Extensible | Univars
 
-let rec transl_type env policy mode styp =
+let rec transl_type env policy locality styp =
   Builtin_attributes.warning_scope styp.ptyp_attributes
-    (fun () -> transl_type_aux env policy mode styp)
+    (fun () -> transl_type_aux env policy locality styp)
 
-and transl_type_aux env policy mode styp =
+and transl_type_aux env policy locality styp =
   let loc = styp.ptyp_loc in
   let ctyp ctyp_desc ctyp_type =
     { ctyp_desc; ctyp_type; ctyp_env = env;
@@ -246,36 +258,39 @@ and transl_type_aux env policy mode styp =
     ctyp (Ttyp_var name) ty
   | Ptyp_arrow _ ->
       let args, ret, ret_mode = extract_params styp in
-      let rec loop acc_mode args =
+      let rec loop locality_acc uniqueness_acc linearity_acc args =
         match args with
-        | (l, arg_mode, arg) :: rest ->
-          let arg_cty = transl_type env policy arg_mode arg in
-          let acc_mode = Alloc_mode.join_const acc_mode arg_mode in
+        | (l, ({Mode.locality = arg_locality; uniqueness = arg_uniqueness; linearity = arg_linearity} as arg_mode), arg) :: rest ->
+          let arg_cty = transl_type env policy arg_locality arg in
+          let locality_acc = Mode.Locality.join_const locality_acc arg_locality in
+          let uniqueness_acc = Mode.Uniqueness.meet_const uniqueness_acc arg_uniqueness in
+          (* the following is becasue of once x -> once (y -> z) *)
+          let linearity_acc = Mode.Linearity.join_const linearity_acc arg_linearity in
           let ret_mode =
             match rest with
             | [] -> ret_mode
-            | _ :: _ -> acc_mode
+            | _ :: _ -> {Mode.locality = locality_acc; uniqueness = uniqueness_acc; linearity = linearity_acc }
           in
-          let ret_cty = loop acc_mode rest in
+          let ret_cty = loop locality_acc uniqueness_acc linearity_acc rest in
           let arg_ty = arg_cty.ctyp_type in
           let arg_ty =
             if Btype.is_optional l
             then newty (Tconstr(Predef.path_option,[arg_ty], ref Mnil))
             else arg_ty
           in
-          let arg_mode = Alloc_mode.of_const arg_mode in
-          let ret_mode = Alloc_mode.of_const ret_mode in
+          let arg_mode = Mode.Alloc.of_const arg_mode in
+          let ret_mode = Mode.Alloc.of_const ret_mode in
           let ty =
             newty
               (Tarrow((l,arg_mode,ret_mode), arg_ty, ret_cty.ctyp_type, commu_ok))
           in
           ctyp (Ttyp_arrow (l, arg_cty, ret_cty)) ty
-        | [] -> transl_type env policy ret_mode ret
+        | [] -> transl_type env policy (ret_mode.locality) ret
       in
-      loop mode args
+      loop locality Shared Many args
   | Ptyp_tuple stl ->
     assert (List.length stl >= 2);
-    let ctys = List.map (transl_type env policy Alloc_mode.Global) stl in
+    let ctys = List.map (transl_type env policy Mode.Locality.Global) stl in
     let ty = newty (Ttuple (List.map (fun ctyp -> ctyp.ctyp_type) ctys)) in
     ctyp (Ttyp_tuple ctys) ty
   | Ptyp_constr(lid, stl) ->
@@ -290,7 +305,7 @@ and transl_type_aux env policy mode styp =
         raise(Error(styp.ptyp_loc, env,
                     Type_arity_mismatch(lid.txt, decl.type_arity,
                                         List.length stl)));
-      let args = List.map (transl_type env policy Alloc_mode.Global) stl in
+      let args = List.map (transl_type env policy Mode.Locality.Global) stl in
       let params = instance_list decl.type_params in
       let unify_param =
         match decl.type_manifest with
@@ -346,7 +361,7 @@ and transl_type_aux env policy mode styp =
         raise(Error(styp.ptyp_loc, env,
                     Type_arity_mismatch(lid.txt, decl.type_arity,
                                         List.length stl)));
-      let args = List.map (transl_type env policy Alloc_mode.Global) stl in
+      let args = List.map (transl_type env policy Mode.Locality.Global) stl in
       let params = instance_list decl.type_params in
       List.iter2
         (fun (sty, cty) ty' ->
@@ -390,7 +405,7 @@ and transl_type_aux env policy mode styp =
             with Not_found ->
               instance (fst(TyVarMap.find alias !used_variables))
           in
-          let ty = transl_type env policy mode st in
+          let ty = transl_type env policy locality st in
           begin try unify_var env t ty.ctyp_type with Unify err ->
             let err = Errortrace.swap_unification_error err in
             raise(Error(styp.ptyp_loc, env, Alias_type_mismatch err))
@@ -401,7 +416,7 @@ and transl_type_aux env policy mode styp =
           let t = newvar () in
           used_variables :=
             TyVarMap.add alias (t, styp.ptyp_loc) !used_variables;
-          let ty = transl_type env policy mode st in
+          let ty = transl_type env policy locality st in
           begin try unify_var env t ty.ctyp_type with Unify err ->
              let err = Errortrace.swap_unification_error err in
             raise(Error(styp.ptyp_loc, env, Alias_type_mismatch err))
@@ -449,7 +464,7 @@ and transl_type_aux env policy mode styp =
             let tl =
               Builtin_attributes.warning_scope rf_attributes
                 (fun () ->
-                   List.map (transl_type env policy Alloc_mode.Global) stl)
+                   List.map (transl_type env policy Mode.Locality.Global) stl)
             in
             let f = match present with
               Some present when not (List.mem l.txt present) ->
@@ -465,7 +480,7 @@ and transl_type_aux env policy mode styp =
             add_typed_field styp.ptyp_loc l.txt f;
               Ttag (l,c,tl)
         | Rinherit sty ->
-            let cty = transl_type env policy Alloc_mode.Global sty in
+          let cty = transl_type env policy Mode.Locality.Global sty in
             let ty = cty.ctyp_type in
             let nm =
               match get_desc cty.ctyp_type with
@@ -522,7 +537,7 @@ and transl_type_aux env policy mode styp =
       let new_univars = make_poly_univars vars in
       let old_univars = !univars in
       univars := new_univars @ !univars;
-      let cty = transl_type env policy mode st in
+      let cty = transl_type env policy locality st in
       let ty = cty.ctyp_type in
       univars := old_univars;
       end_def();
@@ -538,7 +553,7 @@ and transl_type_aux env policy mode styp =
       let mty = !transl_modtype env mty in
       widen z;
       let ptys = List.map (fun (s, pty) ->
-                             s, transl_type env policy Alloc_mode.Global pty
+                             s, transl_type env policy Mode.Locality.Global pty
                           ) l in
       let path = !transl_modtype_longident styp.ptyp_loc env p.txt in
       let ty = newty (Tpackage (path,
@@ -571,14 +586,14 @@ and transl_fields env policy o fields =
     | Otag (s, ty1) -> begin
         let ty1 =
           Builtin_attributes.warning_scope of_attributes
-            (fun () -> transl_type env policy Alloc_mode.Global (Ast_helper.Typ.force_poly ty1))
+            (fun () -> transl_type env policy Mode.Locality.Global (Ast_helper.Typ.force_poly ty1))
         in
         let field = OTtag (s, ty1) in
         add_typed_field ty1.ctyp_loc s.txt ty1.ctyp_type;
         field
       end
     | Oinherit sty -> begin
-        let cty = transl_type env policy Alloc_mode.Global sty in
+        let cty = transl_type env policy Mode.Locality.Global sty in
         let nm =
           match get_desc cty.ctyp_type with
             Tconstr(p, _, _) -> Some p
@@ -672,9 +687,9 @@ let globalize_used_variables env fixed =
           raise (Error(loc, env, Type_mismatch err)))
       !r
 
-let transl_simple_type env ?univars:(uvs=[]) fixed mode styp =
+let transl_simple_type env ?univars:(uvs=[]) fixed locality styp =
   univars := uvs; used_variables := TyVarMap.empty;
-  let typ = transl_type env (if fixed then Fixed else Extensible) mode styp in
+  let typ = transl_type env (if fixed then Fixed else Extensible) locality styp in
   globalize_used_variables env fixed ();
   make_fixed_univars typ.ctyp_type;
   typ
@@ -682,7 +697,7 @@ let transl_simple_type env ?univars:(uvs=[]) fixed mode styp =
 let transl_simple_type_univars env styp =
   univars := []; used_variables := TyVarMap.empty; pre_univars := [];
   begin_def ();
-  let typ = transl_type env Univars Alloc_mode.Global styp in
+  let typ = transl_type env Univars Mode.Locality.Global styp in
   (* Only keep already global variables in used_variables *)
   let new_variables = !used_variables in
   used_variables := TyVarMap.empty;
@@ -728,7 +743,7 @@ let transl_type_scheme env styp =
      begin_def();
      let vars = List.map (fun v -> v.txt) vars in
      let univars = make_poly_univars vars in
-     let typ = transl_simple_type env ~univars true Alloc_mode.Global st in
+     let typ = transl_simple_type env ~univars true Mode.Locality.Global st in
      end_def();
      generalize typ.ctyp_type;
      let _ = instance_poly_univars env styp.ptyp_loc univars in
@@ -739,7 +754,7 @@ let transl_type_scheme env styp =
        ctyp_attributes = styp.ptyp_attributes }
   | _ ->
      begin_def();
-     let typ = transl_simple_type env false Alloc_mode.Global styp in
+     let typ = transl_simple_type env false Mode.Locality.Global styp in
      end_def();
      generalize typ.ctyp_type;
      typ
@@ -848,6 +863,9 @@ let report_error env ppf = function
   | Local_not_enabled ->
       fprintf ppf "@[The local extension is disabled@ \
                      To enable it, pass the '-extension local' flag@]"
+  | Unique_not_enabled ->
+    fprintf ppf "@[The unique extension is disabled@ \
+                 To enable it, pass the '-extension unique' flag@]"
 
 let () =
   Location.register_error_of_exn

@@ -177,10 +177,10 @@ val instance_label:
         bool -> label_description -> type_expr list * type_expr * type_expr
         (* Same, for a label *)
 val prim_mode :
-        alloc_mode option -> (Primitive.mode * Primitive.native_repr)
-        -> alloc_mode
+        Mode.Alloc.t option -> (Primitive.mode * Primitive.native_repr)
+        -> Mode.Alloc.t
 val instance_prim_mode:
-        Primitive.description -> type_expr -> type_expr * alloc_mode option
+        Primitive.description -> type_expr -> type_expr * Mode.Alloc.t option
 
 val apply:
         Env.t -> type_expr list -> type_expr -> type_expr list -> type_expr
@@ -237,7 +237,7 @@ val unify_var: Env.t -> type_expr -> type_expr -> unit
         (* Same as [unify], but allow free univars when first type
            is a variable. *)
 val filter_arrow: Env.t -> type_expr -> arg_label ->
-                  alloc_mode * type_expr * alloc_mode * type_expr
+                  Mode.Alloc.t * type_expr * Mode.Alloc.t * type_expr
         (* A special case of unification with [l:'a -> 'b].  Raises
            [Filter_arrow_failed] instead of [Unify]. *)
 val filter_method: Env.t -> string -> type_expr -> type_expr

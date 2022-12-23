@@ -40,7 +40,7 @@ and 'a pattern_data =
     pat_loc: Location.t;
     pat_extra : (pat_extra * Location.t * attribute list) list;
     pat_type: type_expr;
-    pat_mode: value_mode;
+    pat_mode: Mode.Value.t;
     pat_env: Env.t;
     pat_attributes: attribute list;
    }
@@ -87,7 +87,7 @@ and expression =
     exp_loc: Location.t;
     exp_extra: (exp_extra * Location.t * attribute list) list;
     exp_type: type_expr;
-    exp_mode: value_mode;
+    exp_mode: Mode.Value.t;
     exp_env: Env.t;
     exp_attributes: attribute list;
    }
@@ -100,19 +100,19 @@ and exp_extra =
 
 
 and fun_curry_state =
-  | More_args of { partial_mode : Types.alloc_mode }
-  | Final_arg of { partial_mode : Types.alloc_mode }
+  | More_args of { partial_mode : Mode.Alloc.t }
+  | Final_arg of { partial_mode : Mode.Alloc.t }
 
 and expression_desc =
     Texp_ident of
-      Path.t * Longident.t loc * Types.value_description * ident_kind
+      Path.t * Longident.t loc * Types.value_description * ident_kind * unique_use
   | Texp_constant of constant
-  | Texp_let of rec_flag * value_binding list * expression
+  | Texp_let of rec_flag * value_binding list * expression * borrow_ctx
   | Texp_function of { arg_label : arg_label; param : Ident.t;
       cases : value case list; partial : partial;
       region : bool; curry : fun_curry_state;
       warnings : Warnings.state; }
-  | Texp_apply of expression * (arg_label * apply_arg) list * apply_position
+  | Texp_apply of expression * (arg_label * apply_arg) list * apply_position * borrow_ctx
   | Texp_match of expression * computation case list * partial
   | Texp_try of expression * value case list
   | Texp_tuple of expression list
@@ -122,9 +122,9 @@ and expression_desc =
   | Texp_record of {
       fields : ( Types.label_description * record_label_definition ) array;
       representation : Types.record_representation;
-      extended_expression : expression option;
+      extended_expression : (update_kind * expression) option;
     }
-  | Texp_field of expression * Longident.t loc * label_description
+  | Texp_field of expression * Longident.t loc * label_description * unique_use
   | Texp_setfield of
       expression * Longident.t loc * label_description * expression
   | Texp_array of expression list
@@ -177,7 +177,14 @@ and expression_desc =
   | Texp_probe of { name:string; handler:expression; }
   | Texp_probe_is_enabled of { name:string }
 
-and ident_kind = Id_value | Id_prim of Types.alloc_mode option
+and ident_kind = Id_value | Id_prim of Mode.Alloc.t option
+
+and borrow_ctx = Mode.Value.t option
+
+and unique_use =
+  { mode: Mode.Uniqueness.t;
+    is_borrowed: bool;
+  }
 
 and meth =
   | Tmeth_name of string
@@ -206,6 +213,10 @@ and record_label_definition =
   | Kept of Types.type_expr
   | Overridden of Longident.t loc * expression
 
+and update_kind =
+  | Create_new
+  | In_place
+
 and binding_op =
   {
     bop_op_path : Path.t;
@@ -221,9 +232,9 @@ and ('a, 'b) arg_or_omitted =
   | Omitted of 'b
 
 and omitted_parameter =
-  { mode_closure : alloc_mode;
-    mode_arg : alloc_mode;
-    mode_ret : alloc_mode }
+  { mode_closure : Mode.Alloc.t;
+    mode_arg : Mode.Alloc.t;
+    mode_ret : Mode.Alloc.t}
 
 and apply_arg = (expression, omitted_parameter) arg_or_omitted
 
@@ -389,7 +400,7 @@ and primitive_coercion =
   {
     pc_desc: Primitive.description;
     pc_type: type_expr;
-    pc_poly_mode: alloc_mode option;
+    pc_poly_mode: Mode.Alloc.t option;
     pc_env: Env.t;
     pc_loc : Location.t;
   }

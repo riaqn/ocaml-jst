@@ -15,6 +15,7 @@
 
 open Format
 open Outcometree
+open Modes
 
 exception Ellipsis
 
@@ -269,13 +270,64 @@ let pr_var = Pprintast.tyvar
 let pr_vars =
   print_list pr_var (fun ppf -> fprintf ppf "@ ")
 
-let join_modes rm1 am2 =
-  match rm1, am2 with
-  | Oam_local, _ -> Oam_local
-  | _, Oam_local -> Oam_local
-  | Oam_unknown, _ -> Oam_unknown
-  | _, Oam_unknown -> Oam_unknown
-  | Oam_global, Oam_global -> Oam_global
+let join_locality lm1 lm2 =
+  match lm1, lm2 with
+  | Olm_local, _ -> Olm_local
+  | _, Olm_local -> Olm_local
+  | Olm_unknown, _ -> Olm_unknown
+  | _, Olm_unknown -> Olm_unknown
+  | Olm_global, Olm_global -> Olm_global
+
+let join_uniqueness um1 um2 =
+  match um1, um2 with
+  | Oum_unique, _ -> Oum_unique
+  | _, Oum_unique -> Oum_unique
+  | Oum_unknown, _ -> Oum_unknown
+  | _, Oum_unknown -> Oum_unknown
+  | Oum_shared, Oum_shared -> Oum_shared
+
+let join_linearity lm1 lm2 = 
+  match lm1, lm2 with
+  | Olinm_once, _ 
+  | _, Olinm_once -> Olinm_once
+  | Olinm_unknown, _
+  | _, Olinm_unknown -> Olinm_unknown
+  | Olinm_many, Olinm_many -> Olinm_many
+
+let default_mode = 
+  {locality = Olm_global
+  ;uniqueness = Oum_shared
+  ;linearity = Olinm_many
+  }  
+
+let join_modes  {locality = lm1;
+                uniqueness = um1;
+                linearity = linm1}
+                {locality = lm2;
+                uniqueness = um2;
+                linearity = linm2} =
+  {locality = join_locality lm1 lm2
+  ;uniqueness = join_uniqueness um1 um2
+  ;linearity = join_linearity linm1 linm2
+  }
+
+let same_locality {locality=m1;_} {locality=m2;_} =
+  match m1, m2 with
+  | Olm_local, Olm_global -> false
+  | Olm_global, Olm_local -> false
+  | _, _ -> true
+
+let same_uniqueness {uniqueness=m1;_} {uniqueness=m2;_} =
+  match m1, m2 with
+  | Oum_unique, Oum_shared -> false
+  | Oum_shared, Oum_unique -> false
+  | _, _ -> true
+
+let same_linearity {linearity=m1;_} {linearity=m2;_} =
+  match m1, m2 with
+  | Olinm_many, Olinm_once
+  | Olinm_once, Olinm_many -> false
+  | _, _ -> true
 
 let rec print_out_type_0 mode ppf =
   function
@@ -288,6 +340,41 @@ let rec print_out_type_0 mode ppf =
   | ty ->
       print_out_type_1 mode ppf ty
 
+and print_out_type_mode mode ppf ty =
+  let is_local = match mode.locality with
+    | Olm_local -> true
+    | _ -> false 
+  in
+  let is_unique = match mode.uniqueness with
+    | Oum_unique -> true
+    | _ -> false 
+  in
+  let is_once = match mode.linearity with
+    | Olinm_once -> true
+    | _ -> false
+  in  
+  if is_local || is_unique || is_once then
+    if (not is_local || Clflags.Extension.is_enabled Local)
+    && (not is_unique || Clflags.Extension.is_enabled Unique) 
+    && (not is_once || Clflags.Extension.is_enabled Unique)
+    then begin
+      if is_local then begin
+        pp_print_string ppf "local_";
+        pp_print_space ppf () end;
+      if is_unique then begin
+        pp_print_string ppf "unique_";
+        pp_print_space ppf () end;
+      if is_once then begin
+        pp_print_string ppf "once_";
+        pp_print_space ppf () end;
+      print_out_type_2 mode ppf ty end
+    else
+      let ty = if is_unique then Otyp_attribute (ty, {oattr_name="unique"}) else ty in
+      let ty = if is_local then Otyp_attribute (ty, {oattr_name="local"}) else ty in
+      let ty = if is_once then Otyp_attribute (ty, {oattr_name="once"}) else ty in 
+      print_out_type ppf ty
+  else print_out_type_2 mode ppf ty
+
 and print_out_type_1 mode ppf =
   function
   | Otyp_arrow (lab, am, ty1, rm, ty2) ->
@@ -299,38 +386,16 @@ and print_out_type_1 mode ppf =
       let mode = join_modes mode am in
       print_out_ret mode rm ppf ty2;
       pp_close_box ppf ()
-  | ty ->
-    match mode with
-    | Oam_local ->
-        print_out_type_local mode ppf ty
-    | Oam_unknown -> print_out_type_2 mode ppf ty
-    | Oam_global -> print_out_type_2 mode ppf ty
+  | ty -> print_out_type_mode mode ppf ty
 
 and print_out_arg am ppf ty =
-  match am with
-  | Oam_local ->
-      print_out_type_local am ppf ty
-  | Oam_global -> print_out_type_2 am ppf ty
-  | Oam_unknown -> print_out_type_2 am ppf ty
+  print_out_type_mode am ppf ty
 
+(* If mode and rm do not match up, print the arrow according to rm. *)
 and print_out_ret mode rm ppf ty =
-  match mode, rm with
-  | Oam_local, Oam_local
-  | Oam_global, Oam_global
-  | Oam_unknown, _
-  | _, Oam_unknown -> print_out_type_1 rm ppf ty
-  | _, Oam_local ->
-      print_out_type_local rm ppf ty
-  | _, Oam_global -> print_out_type_2 rm ppf ty
-
-and print_out_type_local m ppf ty =
-  if Clflags.Extension.is_enabled Local then begin
-    pp_print_string ppf "local_";
-    pp_print_space ppf ();
-    print_out_type_2 m ppf ty
-  end else begin
-    print_out_type ppf (Otyp_attribute (ty, {oattr_name="local"}))
-  end
+  if same_locality mode rm && same_uniqueness mode rm && same_linearity mode rm 
+  then print_out_type_1 rm ppf ty
+  else print_out_type_mode rm ppf ty
 
 and print_out_type_2 mode ppf =
   function
@@ -394,9 +459,9 @@ and print_out_type_3 mode ppf =
       fprintf ppf "@[<1>(%a [@@%s])@]"
         (print_out_type_0 mode) t attr.oattr_name
 and print_out_type ppf typ =
-  print_out_type_0 Oam_global ppf typ
+  print_out_type_0 default_mode ppf typ
 and print_simple_out_type ppf typ =
-  print_out_type_3 Oam_global ppf typ
+  print_out_type_3 default_mode ppf typ
 and print_record_decl ppf lbls =
   fprintf ppf "{%a@;<1 -2>}"
     (print_list_init print_out_label (fun ppf -> fprintf ppf "@ ")) lbls
@@ -490,7 +555,7 @@ let rec print_out_class_type ppf =
       fprintf ppf "@[%a%a@]" pr_tyl tyl print_ident id
   | Octy_arrow (lab, ty, cty) ->
       fprintf ppf "@[%s%a ->@ %a@]" (if lab <> "" then lab ^ ":" else "")
-        (print_out_type_2 Oam_global) ty print_out_class_type cty
+        (print_out_type_2 default_mode) ty print_out_class_type cty
   | Octy_signature (self_ty, csil) ->
       let pr_param ppf =
         function

@@ -5,6 +5,7 @@
       core_type (stop_after_typing_impl.ml[13,365+16]..stop_after_typing_impl.ml[13,365+26])
         Ttyp_arrow
         Nolabel
+        Call_many
         core_type (stop_after_typing_impl.ml[13,365+16]..stop_after_typing_impl.ml[13,365+19])
           Ttyp_constr "int!"
           []

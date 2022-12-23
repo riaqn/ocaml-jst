@@ -163,6 +163,7 @@
             core_type (extensions.ml[16,344+29]..[16,344+35])
               Ptyp_arrow
               Nolabel
+              Call_many
               core_type (extensions.ml[16,344+29]..[16,344+30])
                 Ptyp_constr "t" (extensions.ml[16,344+29]..[16,344+30])
                 []

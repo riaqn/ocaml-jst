@@ -130,6 +130,9 @@ let unbound_class =
   Path.Pident (Ident.create_local "*undef*")
 
 
+(* All class identifiers are used shared. *)
+let shared_use = {mode = Mode.Uniqueness.shared; is_borrowed = false}
+
                 (************************************)
                 (*  Some operations on class types  *)
                 (************************************)
@@ -192,7 +195,7 @@ let rec constructor_type constr cty =
   | Cty_signature _ ->
       constr
   | Cty_arrow (l, ty, cty) ->
-      Ctype.newty (Tarrow ((l, Alloc_mode.global, Alloc_mode.global),
+      Ctype.newty (Tarrow ((l, Mode.Alloc.default, Mode.Alloc.default),
                            ty, constructor_type constr cty, commu_ok))
 
                 (***********************************)
@@ -909,7 +912,7 @@ and class_field_second_pass cl_num sign met_env field =
            let self_type = sign.Types.csig_self in
            let meth_type =
              mk_expected
-               (Btype.newgenty (Tarrow((Nolabel, Alloc_mode.global, Alloc_mode.global),
+               (Btype.newgenty (Tarrow((Nolabel, Mode.Alloc.default, Mode.Alloc.default),
                                        self_type, ty, commu_ok)))
            in
            Ctype.raise_nongen_level ();
@@ -929,7 +932,7 @@ and class_field_second_pass cl_num sign met_env field =
            let self_type = sign.Types.csig_self in
            let meth_type =
              mk_expected
-               (Ctype.newty (Tarrow ((Nolabel, Alloc_mode.global, Alloc_mode.global),
+               (Ctype.newty (Tarrow ((Nolabel, Mode.Alloc.default, Mode.Alloc.default),
                                      self_type, unit_type, commu_ok)))
            in
            let texp = type_expect met_env sexpr meth_type in
@@ -964,8 +967,10 @@ and class_fields_second_pass cl_num sign met_env fields =
 and class_structure cl_num virt self_scope final val_env met_env loc
   { pcstr_self = spat; pcstr_fields = str } =
   (* Environment for substructures *)
-  let val_env = Env.add_lock Value_mode.global val_env in
-  let met_env = Env.add_lock Value_mode.global met_env in
+  let val_env = Env.add_locality_lock Mode.Locality.global val_env in
+  let val_env = Env.add_uniqueness_lock ~shared_context:Class Mode.Uniqueness.shared val_env in
+  let met_env = Env.add_locality_lock Mode.Locality.global met_env in
+  let met_env = Env.add_uniqueness_lock ~shared_context:Class Mode.Uniqueness.shared met_env in
   let par_env = met_env in
 
   (* Location of self. Used for locations of self arguments *)
@@ -1168,10 +1173,10 @@ and class_expr_aux cl_num val_env met_env virt self_scope scl =
             (id,
              {exp_desc =
               Texp_ident(path, mknoloc (Longident.Lident (Ident.name id)), vd,
-                         Id_value);
+                         Id_value, shared_use);
               exp_loc = Location.none; exp_extra = [];
               exp_type = Ctype.instance vd.val_type;
-              exp_mode = Value_mode.global;
+              exp_mode = Mode.Value.default;
               exp_attributes = []; (* check *)
               exp_env = val_env'})
           end
@@ -1187,7 +1192,8 @@ and class_expr_aux cl_num val_env met_env virt self_scope scl =
         Typecore.check_partial val_env pat.pat_type pat.pat_loc
           [{c_lhs = pat; c_guard = None; c_rhs = dummy}]
       in
-      let val_env' = Env.add_lock Value_mode.global val_env' in
+      let val_env' = Env.add_locality_lock Mode.Locality.global val_env' in
+      let val_env' = Env.add_uniqueness_lock ~shared_context:Class Mode.Uniqueness.shared val_env' in
       Ctype.raise_nongen_level ();
       let cl = class_expr cl_num val_env' met_env virt self_scope scl' in
       Ctype.end_def ();
@@ -1245,11 +1251,11 @@ and class_expr_aux cl_num val_env met_env virt self_scope scl =
                   let ty' = extract_option_type val_env ty
                   and ty0' = extract_option_type val_env ty0 in
                   let arg = type_argument val_env sarg ty' ty0' in
-                  option_some val_env arg Value_mode.global
+                  option_some val_env arg Mode.Value.default
               )
             in
             let eliminate_optional_arg () =
-              Arg (option_none val_env ty0 Value_mode.global Location.none)
+              Arg (option_none val_env ty0 Mode.Value.default Location.none)
             in
             let remaining_sargs, arg =
               if ignore_labels then begin
@@ -1281,9 +1287,9 @@ and class_expr_aux cl_num val_env met_env virt self_scope scl =
                     if Btype.is_optional l && List.mem_assoc Nolabel sargs then
                       eliminate_optional_arg ()
                     else begin
-                      let mode_closure = Alloc_mode.global in
-                      let mode_arg = Alloc_mode.global in
-                      let mode_ret = Alloc_mode.global in
+                      let mode_closure = Mode.Alloc.default in
+                      let mode_arg = Mode.Alloc.default in
+                      let mode_ret = Mode.Alloc.default in
                       Omitted { mode_closure; mode_arg; mode_ret }
                     end
             in
@@ -1332,10 +1338,10 @@ and class_expr_aux cl_num val_env met_env virt self_scope scl =
              let expr =
                {exp_desc =
                 Texp_ident(path, mknoloc(Longident.Lident (Ident.name id)),vd,
-                           Id_value);
+                           Id_value, shared_use);
                 exp_loc = Location.none; exp_extra = [];
                 exp_type = Ctype.instance vd.val_type;
-                exp_mode = Value_mode.global;
+                exp_mode = Mode.Value.default;
                 exp_attributes = [];
                 exp_env = val_env;
                }
@@ -1429,7 +1435,7 @@ let rec approx_declaration cl =
       let arg =
         if Btype.is_optional l then Ctype.instance var_option
         else Ctype.newvar () in
-      Ctype.newty (Tarrow ((l, Alloc_mode.global, Alloc_mode.global),
+      Ctype.newty (Tarrow ((l, Mode.Alloc.default, Mode.Alloc.default),
                            arg, approx_declaration cl, commu_ok))
   | Pcl_let (_, _, cl) ->
       approx_declaration cl
@@ -1443,7 +1449,7 @@ let rec approx_description ct =
       let arg =
         if Btype.is_optional l then Ctype.instance var_option
         else Ctype.newvar () in
-      Ctype.newty (Tarrow ((l, Alloc_mode.global, Alloc_mode.global),
+      Ctype.newty (Tarrow ((l, Mode.Alloc.default, Mode.Alloc.default),
                            arg, approx_description ct, commu_ok))
   | _ -> Ctype.newvar ()
 

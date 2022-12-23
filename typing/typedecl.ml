@@ -1355,10 +1355,10 @@ let make_native_repr env core_type ty ~global_repr =
     end
 
 let prim_const_mode m =
-  match Types.Alloc_mode.check_const m with
-  | Some Global -> Prim_global
-  | Some Local -> Prim_local
-  | None -> assert false
+  match Mode.Alloc.check_const m with
+  | {locality=Some Global;_} -> Prim_global
+  | {locality=Some Local; _} -> Prim_local
+  | _ -> assert false
 
 let rec parse_native_repr_attributes env core_type ty rmode ~global_repr =
   match core_type.ptyp_desc, get_desc ty,

@@ -49,7 +49,7 @@ and 'a pattern_data =
     pat_loc: Location.t;
     pat_extra : (pat_extra * Location.t * attributes) list;
     pat_type: Types.type_expr;
-    pat_mode: Types.value_mode;
+    pat_mode: Mode.Value.t;
     pat_env: Env.t;
     pat_attributes: attributes;
    }
@@ -155,7 +155,7 @@ and expression =
     exp_loc: Location.t;
     exp_extra: (exp_extra * Location.t * attributes) list;
     exp_type: Types.type_expr;
-    exp_mode: Types.value_mode;
+    exp_mode: Mode.Value.t;
     exp_env: Env.t;
     exp_attributes: attributes;
    }
@@ -173,24 +173,24 @@ and exp_extra =
         (** fun (type t) ->  *)
 
 and fun_curry_state =
-  | More_args of { partial_mode : Types.alloc_mode }
+  | More_args of { partial_mode : Mode.Alloc.t }
         (** [partial_mode] is the mode of the resulting closure
             if this function is partially applied *)
-  | Final_arg of { partial_mode : Types.alloc_mode }
+  | Final_arg of { partial_mode : Mode.Alloc.t }
         (** [partial_mode] is relevant for the final arg only
             because of an optimisation that Simplif does to merge
             functions, which might result in this arg no longer being
-            final *)
+            final *)    
 
 and expression_desc =
     Texp_ident of
-      Path.t * Longident.t loc * Types.value_description * ident_kind
+      Path.t * Longident.t loc * Types.value_description * ident_kind * unique_use
         (** x
             M.x
          *)
   | Texp_constant of constant
         (** 1, 'a', "true", 1.0, 1l, 1L, 1n *)
-  | Texp_let of rec_flag * value_binding list * expression
+  | Texp_let of rec_flag * value_binding list * expression * borrow_ctx
         (** let P1 = E1 and ... and Pn = EN in E       (flag = Nonrecursive)
             let rec P1 = E1 and ... and Pn = EN in E   (flag = Recursive)
          *)
@@ -211,7 +211,7 @@ and expression_desc =
             partial_mode is the mode of the resulting closure if this function
             is partially applied to a single argument.
          *)
-  | Texp_apply of expression * (arg_label * apply_arg) list * apply_position
+  | Texp_apply of expression * (arg_label * apply_arg) list * apply_position * borrow_ctx
         (** E0 ~l1:E1 ... ~ln:En
 
             The expression can be Omitted if the expression is abstracted over
@@ -250,10 +250,11 @@ and expression_desc =
   | Texp_record of {
       fields : ( Types.label_description * record_label_definition ) array;
       representation : Types.record_representation;
-      extended_expression : expression option;
+      extended_expression : (update_kind * expression) option;
     }
-        (** { l1=P1; ...; ln=Pn }           (extended_expression = None)
-            { E0 with l1=P1; ...; ln=Pn }   (extended_expression = Some E0)
+        (** { l1=P1; ...; ln=Pn }                   (extended_expression = None)
+            { E0 with l1=P1; ...; ln=Pn }           (extended_expression = Some (Create_new, E0))
+            { unique_ E0 with l1=P1; ...; ln=Pn }   (extended_expression = Some (In_place, E0))
 
             Invariant: n > 0
 
@@ -263,7 +264,7 @@ and expression_desc =
               { fields = [| l1, Kept t1; l2 Override P2 |]; representation;
                 extended_expression = Some E0 }
         *)
-  | Texp_field of expression * Longident.t loc * Types.label_description
+  | Texp_field of expression * Longident.t loc * Types.label_description * unique_use
   | Texp_setfield of
       expression * Longident.t loc * Types.label_description * expression
   | Texp_array of expression list
@@ -319,14 +320,21 @@ and expression_desc =
   | Texp_probe of { name:string; handler:expression; }
   | Texp_probe_is_enabled of { name:string }
 
-and ident_kind = Id_value | Id_prim of Types.alloc_mode option
+and ident_kind = Id_value | Id_prim of Mode.Alloc.t option
+
+and unique_use =
+  { mode: Mode.Uniqueness.t;
+    is_borrowed: bool;
+  }
+
+and borrow_ctx = Mode.Value.t option
 
 and meth =
     Tmeth_name of string
   | Tmeth_val of Ident.t
   | Tmeth_ancestor of Ident.t * Path.t
 
-  and comprehension =
+and comprehension =
   {
      clauses: comprehension_clause list;
      guard : expression option
@@ -348,6 +356,10 @@ and record_label_definition =
   | Kept of Types.type_expr
   | Overridden of Longident.t loc * expression
 
+and update_kind =
+  | Create_new
+  | In_place
+
 and binding_op =
   {
     bop_op_path : Path.t;
@@ -365,9 +377,9 @@ and ('a, 'b) arg_or_omitted =
   | Omitted of 'b
 
 and omitted_parameter =
-  { mode_closure : Types.alloc_mode;
-    mode_arg : Types.alloc_mode;
-    mode_ret : Types.alloc_mode }
+  { mode_closure : Mode.Alloc.t;
+    mode_arg : Mode.Alloc.t;
+    mode_ret : Mode.Alloc.t }
 
 and apply_arg = (expression, omitted_parameter) arg_or_omitted
 
@@ -539,7 +551,7 @@ and primitive_coercion =
   {
     pc_desc: Primitive.description;
     pc_type: Types.type_expr;
-    pc_poly_mode: Types.alloc_mode option;
+    pc_poly_mode: Mode.Alloc.t option;
     pc_env: Env.t;
     pc_loc : Location.t;
   }
@@ -888,7 +900,7 @@ val let_bound_idents_full:
     value_binding list -> (Ident.t * string loc * Types.type_expr) list
 val let_bound_idents_with_modes:
   value_binding list
-  -> (Ident.t * (Location.t * Types.value_mode) list) list
+  -> (Ident.t * (Location.t * Mode.Value.t) list) list
 
 (** Alpha conversion of patterns *)
 val alpha_pat:

@@ -242,8 +242,8 @@ and pattern : type k . _ -> _ -> k general_pattern -> unit = fun i ppf x ->
   end;
   match x.pat_desc with
   | Tpat_any -> line i ppf "Tpat_any\n";
-  | Tpat_var (s,_) -> line i ppf "Tpat_var \"%a\"\n" fmt_ident s;
-  | Tpat_alias (p, s,_) ->
+  | Tpat_var (s, _) -> line i ppf "Tpat_var \"%a\"\n" fmt_ident s;
+  | Tpat_alias (p, s, _) ->
       line i ppf "Tpat_alias \"%a\"\n" fmt_ident s;
       pattern i ppf p;
   | Tpat_constant (c) -> line i ppf "Tpat_constant %a\n" fmt_constant c;
@@ -343,16 +343,12 @@ and expression i ppf x =
     line i ppf "extra\n";
     List.iter (expression_extra (i+1) ppf) extra;
   end;
-  (match Types.Value_mode.check_const x.exp_mode with
-  | Some Global -> line i ppf "value_mode global\n"
-  | Some Regional -> line i ppf "value_mode regional\n"
-  | Some Local -> line i ppf "value_mode local\n"
-  | None -> line i ppf "value_mode <modevar>\n");
+  line i ppf "value_mode %a" (Mode.Value.print ~verbose:false) x.exp_mode;
   match x.exp_desc with
-  | Texp_ident (li,_,_,_) -> line i ppf "Texp_ident %a\n" fmt_path li;
+  | Texp_ident (li,_,_,_,_) -> line i ppf "Texp_ident %a\n" fmt_path li;
   | Texp_instvar (_, li,_) -> line i ppf "Texp_instvar %a\n" fmt_path li;
   | Texp_constant (c) -> line i ppf "Texp_constant %a\n" fmt_constant c;
-  | Texp_let (rf, l, e) ->
+  | Texp_let (rf, l, e, _) ->
       line i ppf "Texp_let %a\n" fmt_rec_flag rf;
       list i value_binding ppf l;
       expression i ppf e;
@@ -361,7 +357,7 @@ and expression i ppf x =
       line i ppf "region %b\n" region;
       arg_label i ppf p;
       list i case ppf cases;
-  | Texp_apply (e, l, m) ->
+  | Texp_apply (e, l, m, _) ->
       line i ppf "Texp_apply\n";
       line i ppf "apply_mode %s\n"
         (match m with
@@ -387,7 +383,7 @@ and expression i ppf x =
   | Texp_variant (l, eo) ->
       line i ppf "Texp_variant \"%s\"\n" l;
       option i expression ppf eo;
-  | Texp_record { fields; representation; extended_expression } ->
+  | Texp_record { fields; representation; extended_expression = ext_expr } ->
       line i ppf "Texp_record\n";
       let i = i+1 in
       line i ppf "fields =\n";
@@ -395,8 +391,8 @@ and expression i ppf x =
       line i ppf "representation =\n";
       record_representation (i+1) ppf representation;
       line i ppf "extended_expression =\n";
-      option (i+1) expression ppf extended_expression;
-  | Texp_field (e, li, _) ->
+      option (i+1) extended_expression ppf ext_expr;
+  | Texp_field (e, li, _, _) ->
       line i ppf "Texp_field\n";
       expression i ppf e;
       longident i ppf li;
@@ -990,6 +986,13 @@ and record_field i ppf = function
       expression (i+1) ppf e;
   | _, Kept _ ->
       line i ppf "<kept>"
+
+and extended_expression i ppf = function
+  | (Create_new, e) ->
+      expression i ppf e;
+  | (In_place, e) ->
+      line i ppf "<in-place>\n";
+      expression (i+1) ppf e;
 
 and label_x_apply_arg i ppf (l, e) =
   line i ppf "<arg>\n";
