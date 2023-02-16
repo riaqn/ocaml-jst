@@ -65,7 +65,7 @@ module Lambda_utils : sig
   (** Apply a Lambda function to some Lambda values, at a location; all the
       other information needed by [Lapply] is set to some default value. *)
   val apply :
-    loc:scoped_location -> mode:alloc_mode -> lambda -> lambda list -> lambda
+    loc:scoped_location -> mode:locality_mode -> lambda -> lambda list -> lambda
 
   (** Nicer OCaml syntax for constructing Lambda ASTs that operate on integers;
       created by [int_ops], which includes the necessary location in all the

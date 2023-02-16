@@ -379,6 +379,7 @@ module Extension = struct
   type t =
     | Comprehensions
     | Local
+    | Unique
     | Include_functor
     | Polymorphic_parameters
     | Immutable_arrays
@@ -386,6 +387,7 @@ module Extension = struct
   let all =
     [ Comprehensions
     ; Local
+    ; Unique
     ; Include_functor
     ; Polymorphic_parameters
     ; Immutable_arrays
@@ -406,6 +408,7 @@ module Extension = struct
     | Include_functor -> "include_functor"
     | Polymorphic_parameters -> "polymorphic_parameters"
     | Immutable_arrays -> "immutable_arrays_experimental"
+    | Unique -> "unique"
 
   let of_string = function
     | "comprehensions_experimental" -> Some Comprehensions
@@ -413,6 +416,7 @@ module Extension = struct
     | "include_functor" -> Some Include_functor
     | "polymorphic_parameters" -> Some Polymorphic_parameters
     | "immutable_arrays_experimental" -> Some Immutable_arrays
+    | "unique" -> Some Unique
     | _ -> None
 
   let disable_all_extensions = ref false             (* -disable-all-extensions *)

@@ -47,12 +47,13 @@ val instance_poly_univars :
      type scheme (i.e. variables become Tvar rather than Tunivar) *)
 
 val transl_simple_type:
-        Env.t -> ?univars:TyVarEnv.poly_univars -> fixed:bool -> alloc_mode_const
+        Env.t -> ?univars:TyVarEnv.poly_univars -> fixed:bool -> Mode.Locality.const
+        -> Mode.Linearity.const
         -> Parsetree.core_type -> Typedtree.core_type
 val transl_simple_type_univars:
         Env.t -> Parsetree.core_type -> Typedtree.core_type
 val transl_simple_type_delayed
-  :  Env.t -> alloc_mode_const
+  :  Env.t -> Mode.Locality.const -> Mode.Linearity.const
   -> Parsetree.core_type
   -> Typedtree.core_type * type_expr * (unit -> unit)
         (* Translate a type, but leave type variables unbound. Returns
@@ -63,7 +64,7 @@ val transl_type_scheme:
 val transl_type_param:
   Env.t -> Parsetree.core_type -> Typedtree.core_type
 
-val get_alloc_mode : Parsetree.core_type -> alloc_mode_const
+val get_alloc_mode : Parsetree.core_type -> Mode.Alloc.const
 
 exception Already_bound
 

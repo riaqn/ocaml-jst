@@ -198,7 +198,9 @@ let print_cmx_infos (ui, crc) =
         Export_info.print_functions export
   end;
   let pr_afuns _ fns =
-    let mode = function Lambda.Alloc_heap -> "" | Lambda.Alloc_local -> "L" in
+    let mode = function
+      | Lambda.Alloc_heap -> ""
+      | Lambda.Alloc_local -> "L" in
     List.iter (fun (arity,m) -> printf " %d%s" arity (mode m)) fns in
   let pr_cfuns _ fns =
     List.iter (function
