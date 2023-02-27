@@ -1,3 +1,4 @@
+# 1 "typing/typedtree.ml"
 (**************************************************************************)
 (*                                                                        *)
 (*                                 OCaml                                  *)
@@ -179,10 +180,8 @@ and expression_desc =
 
 and ident_kind = Id_value | Id_prim of Mode.Locality.t option
 
-and unique_use =
-  { mode: Mode.Uniqueness.t;
-    mode': Mode.Linearity.t;
-  }
+and unique_use = Mode.Uniqueness.t * Mode.Linearity.t
+
 
 and meth =
   | Tmeth_name of string
