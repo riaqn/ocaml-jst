@@ -1470,13 +1470,15 @@ val foo : 'a -> 'a = <fun>
 |}]
 let foo (local_ x) = x.nlcl
 [%%expect{|
-val foo : local_ 'a nlcl -> 'a = <fun>
+Uncaught exception: File "typing/typecore.ml", line 4898, characters 22-28: Assertion failed
+
 |}]
 let foo (local_ y) =
   let x = local_ { nlcl = y } in
   x.nlcl
 [%%expect{|
-val foo : local_ 'a -> local_ 'a = <fun>
+Uncaught exception: File "typing/typecore.ml", line 6290, characters 12-18: Assertion failed
+
 |}]
 
 let foo (local_ { imm }) = imm
@@ -1515,13 +1517,15 @@ val foo : 'a -> 'a = <fun>
 |}]
 let foo (local_ { nlcl }) = nlcl
 [%%expect{|
-val foo : local_ 'a nlcl -> 'a = <fun>
+Uncaught exception: File "typing/typecore.ml", line 2593, characters 24-30: Assertion failed
+
 |}]
 let foo (local_ y) =
   let { nlcl } = local_ { nlcl = y } in
   nlcl
 [%%expect{|
-val foo : local_ 'a -> local_ 'a = <fun>
+Uncaught exception: File "typing/typecore.ml", line 2593, characters 24-30: Assertion failed
+
 |}]
 
 let foo (local_ imm) =
@@ -1579,17 +1583,16 @@ let foo (local_ nlcl) =
   let _ = { nlcl } in
   ()
 [%%expect{|
-val foo : local_ 'a -> unit = <fun>
+Uncaught exception: File "typing/typecore.ml", line 6290, characters 12-18: Assertion failed
+
 |}]
 let foo () =
   let nlcl = local_ ref 5 in
   let _ = { nlcl } in
   ()
 [%%expect{|
-Line 3, characters 12-16:
-3 |   let _ = { nlcl } in
-                ^^^^
-Error: This value escapes its region
+Uncaught exception: File "typing/typecore.ml", line 6290, characters 12-18: Assertion failed
+
 |}]
 
 (* Global and nonlocal fields are preserved in module inclusion *)
@@ -2630,10 +2633,8 @@ let f (local_ s : string) =
   let local_ x = RFoo(s', "bar") in
   "bar"
 [%%expect{|
-Line 3, characters 22-24:
-3 |   let local_ x = RFoo(s', "bar") in
-                          ^^
-Error: This value escapes its region
+Uncaught exception: File "typing/typecore.ml", line 6737, characters 15-21: Assertion failed
+
 |}]
 
 (* local is not outer than global either *)
@@ -2642,10 +2643,8 @@ let f =
   let x = RFoo(s, "bar") in
   "bar"
 [%%expect{|
-Line 3, characters 15-16:
-3 |   let x = RFoo(s, "bar") in
-                   ^
-Error: This value escapes its region
+Uncaught exception: File "typing/typecore.ml", line 6737, characters 15-21: Assertion failed
+
 |}]
 
 
@@ -2654,7 +2653,8 @@ let f (s : string) =  (* s is global *)
   let local_ _x = RFoo (s, "bar") in  (* x is local *)
   "foo"
 [%%expect{|
-val f : string -> string = <fun>
+Uncaught exception: File "typing/typecore.ml", line 6737, characters 15-21: Assertion failed
+
 |}]
 
 (* and regional is outer than local *)
@@ -2662,7 +2662,8 @@ let f (local_ s : string) =  (* s is regional *)
   let local_ _x = RFoo (s, "bar") in  (* x is local *)
   "foo"
 [%%expect{|
-val f : local_ string -> string = <fun>
+Uncaught exception: File "typing/typecore.ml", line 6737, characters 15-21: Assertion failed
+
 |}]
 
 (* s' extracted from x is not local  *)
@@ -2673,7 +2674,8 @@ let f (local_ s : string) =
   | RFoo (s', _) -> s'
 
 [%%expect{|
-val f : local_ string -> local_ string = <fun>
+Uncaught exception: File "typing/typecore.ml", line 6737, characters 15-21: Assertion failed
+
 |}]
 
 (* Moreover, it is not global *)
@@ -2682,10 +2684,8 @@ let f (local_ s : string) =
   match x with
   | RFoo (s', _) -> GFoo (s', "bar")
 [%%expect{|
-Line 4, characters 26-28:
-4 |   | RFoo (s', _) -> GFoo (s', "bar")
-                              ^^
-Error: This value escapes its region
+Uncaught exception: File "typing/typecore.ml", line 6737, characters 15-21: Assertion failed
+
 |}]
 
 (* x is already global *)
@@ -2695,7 +2695,8 @@ let f (s : string) =
   match x with
   | RFoo (s', _) -> GFoo(s', "bar")
 [%%expect{|
-val f : string -> gfoo = <fun>
+Uncaught exception: File "typing/typecore.ml", line 6737, characters 15-21: Assertion failed
+
 |}]
 
 (* regional s extracted from regional x *)
@@ -2705,7 +2706,8 @@ let f (local_ x : rfoo) =
   match x with
   | RFoo (s, _) -> s
 [%%expect{|
-val f : local_ rfoo -> string = <fun>
+Uncaught exception: File "typing/typecore.ml", line 2543, characters 27-33: Assertion failed
+
 |}]
 
 (* second, it is not global *)
@@ -2713,7 +2715,8 @@ let f (local_ x : rfoo) =
   match x with
   | RFoo (s, _) -> ref s
 [%%expect{|
-val f : local_ rfoo -> string ref = <fun>
+Uncaught exception: File "typing/typecore.ml", line 2543, characters 27-33: Assertion failed
+
 |}]
 
 

@@ -18,12 +18,12 @@ let transl_locality_mode_r locality =
 
 let transl_alloc_mode_l mode =
 (* we only take the locality axis *)
-  Alloc.locality_of mode
+  Alloc.locality mode
   |> transl_locality_mode_l
 
 let transl_alloc_mode_r mode =
   (* we only take the locality axis *)
-  Alloc.locality_of mode
+  Alloc.locality mode
   |> transl_locality_mode_r
 
 let transl_modify_mode locality =

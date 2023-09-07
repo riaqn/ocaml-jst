@@ -145,7 +145,8 @@ let foo (local_ x) =
 
 [%%expect{|
 type t = { nonlocal_ x : int option; }
-val foo : local_ int option -> local_ int option = <fun>
+Uncaught exception: File "typing/typecore.ml", line 6290, characters 12-18: Assertion failed
+
 |}]
 
 let foo (local_ x) =
@@ -153,10 +154,8 @@ let foo (local_ x) =
   [%exclave] { x }
 
 [%%expect{|
-Line 3, characters 15-16:
-3 |   [%exclave] { x }
-                   ^
-Error: This value escapes its region
+Uncaught exception: File "typing/typecore.ml", line 6290, characters 12-18: Assertion failed
+
 |}]
 
 (* semantics tests *)

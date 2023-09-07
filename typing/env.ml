@@ -341,9 +341,9 @@ type shared_context =
 type value_lock =
   | Escape_lock of escaping_context
   | Share_lock of shared_context
-  | Closure_lock of closure_context option * Mode.Locality.r * Mode.Linearity.r
-  | Region_lock
-  | Exclave_lock
+  | Closure_lock of closure_context option * Mode.Value.Comonadic.r
+  | Exclave_lock of Mode.Regionality.Index.t
+  (** values whose level higher than or equal to n need to be rejected *)
 
 module IdTbl =
   struct
@@ -575,6 +575,7 @@ type t = {
   summary: summary;
   local_constraints: type_declaration Path.Map.t;
   flags: int;
+  region : Mode.Regionality.Index.t
 }
 
 and module_components =
@@ -713,7 +714,7 @@ type lookup_error =
   | Cannot_scrape_alias of Longident.t * Path.t
   | Local_value_escaping of Longident.t * escaping_context
   | Once_value_used_in of Longident.t * shared_context
-  | Value_used_in_closure of Longident.t * Mode.Alloc.error *
+  | Value_used_in_closure of Longident.t * Mode.Value.Comonadic.error *
       closure_context option
   | Local_value_used_in_exclave of Longident.t
 
@@ -768,6 +769,7 @@ let empty = {
   summary = Env_empty; local_constraints = Path.Map.empty;
   flags = 0;
   functor_args = Ident.empty;
+  region = Mode.Regionality.Index.outermost
  }
 
 let in_signature b env =
@@ -2378,19 +2380,32 @@ let add_share_lock shared_context env =
   let lock = Share_lock shared_context in
   { env with values = IdTbl.add_lock lock env.values }
 
-let add_closure_lock ?closure_context locality linearity env =
+let add_closure_lock ?closure_context comonoidal env =
   let lock = Closure_lock
     (closure_context,
-     Mode.Locality.disallow_left locality,
-     Mode.Linearity.disallow_left linearity)
+     Mode.Value.Comonadic.disallow_left comonoidal)
   in
   { env with values = IdTbl.add_lock lock env.values }
 
-let add_region_lock env =
-  { env with values = IdTbl.add_lock Region_lock env.values }
+let enter_region env =
+  let region = Mode.Regionality.Index.enter env.region in
+  { env with region }
 
-let add_exclave_lock env =
-  { env with values = IdTbl.add_lock Exclave_lock env.values }
+let region env = env.region
+let local env = Mode.Regionality.max (region env)
+
+let enter_exclave region env =
+  (* will reject to provide values in the current region *)
+  let lock = Exclave_lock region in
+  { env with
+    region;
+    values = IdTbl.add_lock lock env.values
+  }
+
+let escape env =
+  env.region
+  |> Mode.Regionality.Const.escape
+  |> Mode.Regionality.of_const
 
 (* Insertion of all components of a signature *)
 
@@ -2938,13 +2953,11 @@ let lock_mode ~errors ~loc env id vmode locks =
   List.fold_left
     (fun (vmode, reason) lock ->
       match lock with
-      | Region_lock ->
-        let vmode = Mode.alloc_to_value_l2r (Mode.value_to_alloc_r2l vmode) in
-        Mode.Value.disallow_right vmode, reason
       | Escape_lock escaping_context ->
+          (* Format.eprintf "escape_lock: %a\n" (Mode.Value.print ~verbose:true) vmode; *)
           (match
             Mode.Regionality.submode
-              (Mode.Value.locality_of vmode)
+              (Mode.Value.regionality vmode)
               (Mode.Regionality.global)
           with
           | Ok () -> (vmode, reason)
@@ -2952,9 +2965,10 @@ let lock_mode ~errors ~loc env id vmode locks =
               may_lookup_error errors loc env
                 (Local_value_escaping (id, escaping_context)))
       | Share_lock shared_context ->
+          (* Format.eprintf "share_lock: %a\n" (Mode.Value.print ~verbose:true) vmode; *)
           (match
               Mode.Linearity.submode
-                (Mode.Value.linearity_of vmode)
+                (Mode.Value.linearity vmode)
                 Mode.Linearity.many
             with
             | Error _ ->
@@ -2969,39 +2983,31 @@ let lock_mode ~errors ~loc env id vmode locks =
               ]
           in
           vmode, Some shared_context
-      | Closure_lock (closure_context, locality, linearity) ->
-          (match
-            Mode.Regionality.submode
-              (Mode.Value.locality_of vmode)
-              (Mode.locality_as_regionality locality)
-            with
-          | Error _ ->
+      | Closure_lock (closure_context, comonadic) ->
+          (* Variables being closed over must live longer than the closure *)
+          (match Mode.Value.Comonadic.submode vmode.Mode.comonadic comonadic with
+          | Error e ->
               may_lookup_error errors loc env
-                (Value_used_in_closure (id, `Locality, closure_context))
-          | Ok () -> ()
-          );
-          (match Mode.Linearity.submode (Mode.Value.linearity_of vmode) linearity with
-          | Error _ ->
-              may_lookup_error errors loc env
-                (Value_used_in_closure (id, `Linearity, closure_context))
+                (Value_used_in_closure (id, e, closure_context))
           | Ok () -> ()
           );
           let vmode =
             Mode.Value.join
               [ vmode;
-                Mode.Value.min_with_uniqueness (Mode.linear_to_unique linearity)]
+                Mode.Value.min_with_uniqueness (Mode.linear_to_unique
+                (Mode.Value.Comonadic.linearity comonadic))]
           in
           vmode, reason
-      | Exclave_lock ->
-          (match
-            Mode.Regionality.submode
-              (Mode.Value.locality_of vmode)
-              Mode.Regionality.regional
-          with
-          | Ok () -> (Mode.alloc_as_value (Mode.value_to_alloc_r2l vmode), reason)
-          | Error _ ->
-              may_lookup_error errors loc env
-                (Local_value_used_in_exclave id))
+      | Exclave_lock r -> begin
+        match
+          Mode.Regionality.submode
+            (Mode.Value.regionality vmode)
+            (Mode.Regionality.local r)
+        with
+        | Ok () -> vmode, reason
+        | Error () -> may_lookup_error errors loc env
+            (Local_value_used_in_exclave(id))
+      end
     ) (vmode, None) locks
 
 let lookup_ident_value ~errors ~use ~loc name env =
@@ -3904,9 +3910,8 @@ let report_lookup_error _loc env ppf = function
   | Value_used_in_closure (lid, error, context) ->
         let e0, e1 =
           match error with
-          | `Locality -> "local", "might escape"
+          | `Regionality -> "local", "might escape"
           | `Linearity -> "shared", "is unique"
-          | _ -> assert false
         in
         fprintf ppf
         "@[The value %a is %s, so cannot be used \

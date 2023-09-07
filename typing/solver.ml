@@ -27,7 +27,7 @@ let undo_changes l = List.iter undo_change l
 (* to be filled in by types.ml *)
 let append_changes : (changes ref -> unit) ref = ref (fun _ -> ())
 
-module Mono_solver (C : Mono_lattices) = (* C for category *)
+module Solver_mono (C : Lattices_mono) = (* C for category *)
 struct
   (* best attempt was made so that this solver looks very similar to the
      original one by stephen *)
@@ -48,47 +48,55 @@ struct
         'a * ('a, disallowed * allowed) morphvar list
         -> ('a, disallowed * allowed) mode
 
+  (** Explains why submode failed. Calling [submode x y] might trigger this
+      error, where [hi] is the highest value [y] can be, and [lo] is the lowest
+      value [x] can be. We will have that "[lo] <= [hi] is false", which caused
+      the failure *)
+  (* type 'a error = {
+    lo : 'a;
+    hi : 'a;
+  } *)
+
   let address_of : 'a var -> int = Obj.magic
 
-  let print_var ppf v =
+  let print_var obj ppf v =
     match v.hint with
-    | None -> Format.fprintf ppf "%x" (address_of v)
+    | None -> Format.fprintf ppf "%x[%a,%a]" (address_of v) (C.print obj) v.lower (C.print obj) v.upper
     | Some s -> Format.fprintf ppf "%s@@%x" s (address_of v)
 
-  let print_morphvar dst ppf (Amorphvar (src, v, f)) =
-    Format.fprintf ppf "%a(%a)" (C.print_morph src dst) f print_var v
+  let print_morphvar ppf (Amorphvar (src, v, f)) =
+    Format.fprintf ppf "%a(%a)" (C.print_morph src) f (print_var src) v
 
   let print_raw :
       type a l r.
-      a C.obj ->
       ?verbose:bool ->
       ?axis:string ->
+      a C.obj ->
       Format.formatter ->
       (a, l * r) mode ->
       unit =
-   fun (obj : a C.obj) ?(verbose = true) ?axis ppf m ->
+   fun  ?(verbose = true) ?axis (obj : a C.obj) ppf m ->
     let print_axis () =
       match axis with None -> () | Some s -> Format.fprintf ppf "%s:" s
     in
-    let module L = (val (C.obj obj)) in
     match m with
-    | Amode a -> L.print ppf a
+    | Amode a -> C.print obj ppf a
     | Amodevar mv ->
         print_axis ();
-        if verbose then print_morphvar obj ppf mv else Format.fprintf ppf "?"
+        if verbose then print_morphvar ppf mv else Format.fprintf ppf "?"
     | Amodejoin (a, mvs) ->
         print_axis ();
-        Format.fprintf ppf "join(%a,%a)" L.print a
+        Format.fprintf ppf "join(%a,%a)" (C.print obj) a
           (Format.pp_print_list
              ~pp_sep:(fun ppf () -> Format.fprintf ppf ",")
-             (print_morphvar obj))
+             print_morphvar)
           mvs
     | Amodemeet (a, mvs) ->
         print_axis ();
-        Format.fprintf ppf "meet(%a,%a)" L.print a
+        Format.fprintf ppf "meet(%a,%a)" (C.print obj) a
           (Format.pp_print_list
              ~pp_sep:(fun ppf () -> Format.fprintf ppf ",")
-             (print_morphvar obj))
+             print_morphvar)
           mvs
 
   (* let allow_right = function
@@ -108,51 +116,48 @@ struct
   let allow_left : type a l r. (a, allowed * r) mode -> (a, l * r) mode =
     Obj.magic
 
-  let mlower dst (Amorphvar (src, var, morph)) = C.apply src dst morph var.lower
-  let mupper dst (Amorphvar (src, var, morph)) = C.apply src dst morph var.upper
+  let mlower (Amorphvar (src, var, morph)) = C.apply src morph var.lower
+  let mupper (Amorphvar (src, var, morph)) = C.apply src morph var.upper
   let min (type a) (obj : a C.obj) =
-    let module L = (val C.obj obj) in
-    Amode L.min
+    Amode (C.min obj)
+
   let max (type a) (obj : a C.obj) =
-    let module L = (val C.obj obj) in
-    Amode L.max
+    Amode (C.max obj)
+
   let of_const a = Amode a
 
-  let apply_morphvar mid _dst morph (Amorphvar (src, var, morph')) =
+  let apply_morphvar mid morph (Amorphvar (src, var, morph')) =
     Amorphvar (src, var, C.compose mid morph morph')
 
   let apply :
       type a b l r.
       a C.obj ->
-      b C.obj ->
       (a, b, l * r) C.morph ->
       (a, l * r) mode ->
       (b, l * r) mode =
-   fun src dst morph -> function
-    | Amode a -> Amode (C.apply src dst morph a)
-    | Amodevar mv -> Amodevar (apply_morphvar src dst morph mv)
+   fun src morph -> function
+    | Amode a -> Amode (C.apply src morph a)
+    | Amodevar mv -> Amodevar (apply_morphvar src morph mv)
     | Amodejoin (a, vs) ->
         Amodejoin
-          (C.apply src dst morph a, List.map (apply_morphvar src dst morph) vs)
+          (C.apply src morph a, List.map (apply_morphvar src morph) vs)
     | Amodemeet (a, vs) ->
         Amodemeet
-          (C.apply src dst morph a, List.map (apply_morphvar src dst morph) vs)
+          (C.apply src morph a, List.map (apply_morphvar src morph) vs)
 
   let update_lower (type a) ~log (obj : a C.obj) v a =
     (match log with
     | None -> ()
     | Some log -> log := Clower (v, v.lower) :: !log
     );
-    let module L = (val C.obj obj) in
-    v.lower <- L.join v.lower a
+    v.lower <- C.join obj v.lower a
 
   let update_upper (type a) ~log (obj : a C.obj) v a =
     (match log with
     | None -> ()
     | Some log -> log := Cupper (v, v.upper) :: !log
     );
-    let module L = (val C.obj obj) in
-    v.upper <- L.meet v.upper a
+    v.upper <- C.meet obj v.upper a
 
   let set_vlower ~log v vlower =
     (match log with
@@ -163,17 +168,16 @@ struct
 
   let submode_cv : type a. log:_ -> a C.obj -> a -> a var -> a option =
     fun (type a) ~log (obj : a C.obj) a' v ->
-     let module L = (val C.obj obj) in
-     if L.le a' v.lower then None
-     else if not (L.le a' v.upper) then Some v.upper
+     if C.le obj a' v.lower then None
+     else if not (C.le obj a' v.upper) then Some v.upper
      else (
        update_lower ~log obj v a';
-       if L.le v.upper v.lower then set_vlower ~log v [];
+       if C.le obj v.upper v.lower then set_vlower ~log v [];
        None)
 
   let submode_cmv :
       type a l. log:_ -> a C.obj -> a -> (a, l * allowed) morphvar -> a option =
-   fun ~log dst a (Amorphvar (src, v, f)) ->
+   fun ~log obj a (Amorphvar (src, v, f) as mv) ->
     (*
     We now justify our choice of implementing the polarization outside of this
     core solver:
@@ -195,9 +199,12 @@ struct
         *)
     (* want a <= f v
        therefore f' a <= v *)
-    let f' = C.left_adjoint f in
-    let a' = C.apply dst src f' a in
-    Option.map (C.apply src dst f) (submode_cv ~log src a' v)
+    if not (C.le obj a (mupper mv)) then
+      Some (mupper mv)
+    else
+      let dst, f' = C.left_adjoint src f in
+      let a' = C.apply dst f' a in
+      Option.map (C.apply src f) (submode_cv ~log src a' v)
 
   (* None if success; Some x if failed; x is the next best attempt that MIGHT succeed.
      log and log' separate: log directly related to the operation and should be
@@ -205,9 +212,8 @@ struct
   let rec submode_vc :
       type a. log:_ -> log': (_ option) -> a C.obj -> a var -> a -> a option =
     fun (type a) ~log ~log' (obj : a C.obj) v a' ->
-      let module L = (val C.obj obj) in
-     if L.le v.upper a' then None
-     else if not (L.le v.lower a') then Some v.lower
+     if C.le obj v.upper a' then None
+     else if not (C.le obj v.lower a') then Some v.lower
      else (
        update_upper ~log obj v a';
        let r =
@@ -215,30 +221,33 @@ struct
          |> List.find_map (fun mu ->
                 let r = submode_mvc ~log ~log' obj mu v.upper in
                 (* update v.lower based on mu.lower, almost free *)
-                let mu_lower = mlower obj mu in
-                if not (L.le mu_lower v.lower) then
+                let mu_lower = mlower mu in
+                if not (C.le obj mu_lower v.lower) then
                   update_lower ~log:log' obj v mu_lower;
                 r)
        in
-       if L.le v.upper v.lower then set_vlower ~log v [];
+       if C.le obj v.upper v.lower then set_vlower ~log v [];
        r)
 
   and submode_mvc :
         'a 'r.
         log:_ ->
         log':(_ option) ->
-        'a C.obj ->
+        ('a C.obj)->
         ('a, allowed * 'r) morphvar ->
         'a ->
         'a option =
-   fun ~log ~log' dst (Amorphvar (src, v, f)) a ->
+   fun ~log ~log' obj (Amorphvar (src, v, f) as mv) a ->
     (* let module L = (val C.obj obj0) in *)
     (* want f v <= a
        therefore v <= f' a
     *)
-    let f' = C.right_adjoint f in
-    let a' = C.apply dst src f' a in
-    Option.map (C.apply src dst f) (submode_vc ~log ~log' src v a')
+    if not (C.le obj (mlower mv) a) then
+      Some (mlower mv)
+    else
+      let dst, f' = C.right_adjoint src f in
+      let a' = C.apply dst f' a in
+      Option.map (C.apply src f) (submode_vc ~log ~log' src v a')
 
   (* calculate the precise lower bound *)
   let constrain_lower_try (type a) (obj : a C.obj) (v : a var) =
@@ -251,14 +260,13 @@ struct
       | None -> (log, lower)
       | Some a ->
           undo_changes !log;
-          let module L = (val C.obj obj) in
-          loop (L.join a lower)
+          loop (C.join obj a lower)
     in
     loop v.lower
 
-  let constrain_mlower_try dst (Amorphvar (src, v, f)) =
+  let constrain_mlower_try (Amorphvar (src, v, f)) =
     let log, lower = constrain_lower_try src v in
-    (log, C.apply src dst f lower)
+    (log, C.apply src f lower)
 
   let eq_morphvar :
       type a l0 r0 l1 r1. (a, l0 * r0) morphvar -> (a, l1 * r1) morphvar -> bool
@@ -272,9 +280,8 @@ struct
            = C.disallow_left (C.disallow_right f1)
 
   let submode_mvmv (type a) ~log ~log' (dst : a C.obj)
-      (Amorphvar (src0, v, f) as mv) (Amorphvar (_, u, g) as mu) =
-    let module L = (val C.obj dst) in
-    if L.le (mupper dst mv) (mlower dst mu) then None
+      (Amorphvar (src0, v, f) as mv) (Amorphvar (src1, u, g) as mu) =
+    if C.le dst (mupper mv) (mlower mu) then None
     else if eq_morphvar mv mu then None
     else
       (* we have f v <= g u
@@ -282,24 +289,26 @@ struct
          On the other hand, we also have
          v <= f' (g u)
       *)
-      let g'f = C.compose dst (C.left_adjoint g) (C.disallow_right f) in
-      let x = Amorphvar (src0, v, g'f) in
 
       (* let newvar = Amorphvar (obj0, v, ) in *)
-      match submode_mvc ~log ~log' dst mv (mupper dst mu) with
-      | None -> (
-          if not (List.exists (fun mv -> eq_morphvar mv x) u.vlower) then
-            set_vlower ~log u (x :: u.vlower);
-          match submode_cmv ~log dst (mlower dst mv) mu with
-          | None -> None
-          | Some a -> Some (mlower dst mv, a))
-      | Some a -> Some (a, mupper dst mu)
+      match submode_mvc ~log ~log' dst mv (mupper mu) with
+      | Some a -> Some (a, mupper mu)
+      | None ->
+          match submode_cmv ~log dst (mlower mv) mu with
+          | Some a -> Some (mlower mv, a)
+          | None ->
+            let dst1, g' = C.left_adjoint src1 g in
+            let g'f = C.compose dst1 g' (C.disallow_right f) in
+            let x = Amorphvar (src0, v, g'f) in
+            if not (List.exists (fun mv -> eq_morphvar mv x) u.vlower) then
+              set_vlower ~log u (x :: u.vlower);
+            None
+
 
   let fresh (type a) ?hint (obj : a C.obj) =
-    let module L = (val C.obj obj) in
     {
-      upper = L.max;
-      lower = L.min;
+      upper = C.max obj;
+      lower = C.min obj;
       vlower = [];
       hint (* mark = false  *);
     }
@@ -308,20 +317,20 @@ struct
 
   let submode_try (type a r l) ?(logging=true) (obj : a C.obj) (a : (a, allowed * r) mode)
       (b : (a, l * allowed) mode) =
+    (* Format.eprintf "submode_try %a %a\n" (print_raw obj) a (print_raw obj) b; *)
     let log, log' =
       if logging then Some (ref []), Some (ref [])
       else None, None
     in
-    let module L = (val C.obj obj) in
     match
       match (a, b) with
-      | Amode a, Amode b -> L.le a b
+      | Amode a, Amode b -> C.le obj a b
       | Amodevar v, Amode c -> Option.is_none (submode_mvc ~log ~log' obj v c)
       | Amode c, Amodevar v -> Option.is_none (submode_cmv ~log obj c v)
       | Amodevar v, Amodevar u ->
           Option.is_none (submode_mvmv ~log ~log' obj v u)
       | Amode a, Amodemeet (b, mvs) ->
-          L.le a b
+          C.le obj a b
           && Option.is_none
                (List.find_map (fun mv -> submode_cmv ~log obj a mv) mvs)
       | Amodevar mv, Amodemeet (b, mvs) ->
@@ -331,7 +340,7 @@ struct
                   (fun mv' -> submode_mvmv ~log ~log' obj mv mv')
                   mvs)
       | Amodejoin (a, mvs), Amode b ->
-          L.le a b
+          C.le obj a b
           && Option.is_none
                (List.find_map (fun mv' -> submode_mvc ~log ~log' obj mv' b) mvs)
       | Amodejoin (a, mvs), Amodevar mv ->
@@ -342,7 +351,7 @@ struct
                   mvs)
       | Amodejoin (a, mvs), Amodemeet (b, mus) ->
           (* TODO: mabye create a intermediate variable? *)
-          L.le a b
+          C.le obj a b
           && Option.is_none
               (List.find_map (fun mv -> submode_mvc ~log ~log' obj mv b) mvs)
           && Option.is_none
@@ -365,11 +374,18 @@ struct
         Error ()
 
   let submode obj a b =
+    try
     match submode_try obj a b with
     | Ok log ->
         Option.iter (!append_changes) log;
         Ok ()
     | Error () -> Error ()
+    with e ->
+      Format.eprintf "submode: %a <= %a\n"
+      (print_raw obj ~verbose:true ?axis:None) a
+      (print_raw obj ~verbose:true ?axis:None) b
+    ;
+      raise e
 
   let submode_exn obj m n =
     match submode obj m n with
@@ -387,57 +403,52 @@ struct
     | Error () -> invalid_arg "equate_exn"
 
   let constrain_upper_morphvar obj mv =
-    submode_exn obj (Amode (mupper obj mv)) (Amodevar mv);
-    mupper obj mv
+    submode_exn obj (Amode (mupper mv)) (Amodevar mv);
+    mupper mv
 
   let constrain_upper : type a l. a C.obj -> (a, l * allowed) mode -> a =
    fun obj -> function
     | Amode m -> m
     | Amodevar mv -> constrain_upper_morphvar obj mv
     | Amodemeet (a, mvs) ->
-        let module L = (val C.obj obj) in
         List.fold_left
-          (fun acc mv -> L.meet acc (constrain_upper_morphvar obj mv))
+          (fun acc mv -> C.meet obj acc (constrain_upper_morphvar obj mv))
           a mvs
-
-
 
   let join :
       type a r.
       a C.obj -> (a, allowed * r) mode list -> (a, allowed * disallowed) mode =
    fun obj l ->
-    let module L = (val C.obj obj) in
     let rec loop a mvs =
-      if L.le L.max a then fun _ -> Amode L.max
+      if C.le obj (C.max obj) a then fun _ -> Amode (C.max obj)
       else function
         | [] -> Amodejoin (a, mvs)
         | mv :: xs -> (
             match disallow_right mv with
-            | Amode b -> loop (L.join a b) mvs xs
+            | Amode b -> loop (C.join obj a b) mvs xs
             | Amodevar mv -> loop a (mv :: mvs) xs
-            | Amodejoin (b, mvs') -> loop (L.join a b) (mvs' @ mvs) xs)
+            | Amodejoin (b, mvs') -> loop (C.join obj a b) (mvs' @ mvs) xs)
     in
-    loop L.min [] l
+    loop (C.min obj) [] l
 
   let meet :
       type a l.
       a C.obj -> (a, l * allowed) mode list -> (a, disallowed * allowed) mode =
    fun obj l ->
-    let module L = (val C.obj obj) in
     let rec loop a mvs =
-      if L.le a L.min then fun _ -> Amode L.min
+      if C.le obj a (C.min obj) then fun _ -> Amode (C.min obj)
       else function
         | [] -> Amodemeet (a, mvs)
         | mv :: xs -> (
             match disallow_left mv with
-            | Amode b -> loop (L.meet a b) mvs xs
+            | Amode b -> loop (C.meet obj a b) mvs xs
             | Amodevar mv -> loop a (mv :: mvs) xs
-            | Amodemeet (b, mvs') -> loop (L.meet a b) (mvs' @ mvs) xs)
+            | Amodemeet (b, mvs') -> loop (C.meet obj a b) (mvs' @ mvs) xs)
     in
-    loop L.max [] l
+    loop (C.max obj) [] l
 
-  let constrain_lower_morphvar ~commit obj mv =
-    let log, lower = constrain_mlower_try obj mv in
+  let constrain_lower_morphvar ~commit mv =
+    let log, lower = constrain_mlower_try mv in
     if commit then !append_changes log
     else undo_changes !log;
     lower
@@ -445,65 +456,61 @@ struct
   let constrain_lower : type a r. a C.obj -> (a, allowed * r) mode -> a =
    fun obj -> function
     | Amode a -> a
-    | Amodevar mv -> constrain_lower_morphvar ~commit:true obj mv
+    | Amodevar mv -> constrain_lower_morphvar ~commit:true mv
     | Amodejoin (a, mvs) ->
-        let module L = (val C.obj obj) in
         List.fold_left
           (fun acc mv ->
-            L.join acc (constrain_lower_morphvar ~commit:true obj mv))
+            C.join obj acc (constrain_lower_morphvar ~commit:true mv))
           a mvs
 
   (* because lower bound conservative, this check is also conservative.
      if it returns Some, then definitely a constant.
-     if it returns None, then may be a constant, but we don't know. *)
+     if it returns None, then we don't know anything *)
   let check_const : type a l r. a C.obj -> (a, l * r) mode -> a option =
-
    fun obj ->
-    let module L = (val C.obj obj) in
     function
     | Amode a -> Some a
     | Amodevar mv ->
-        let lower = constrain_lower_morphvar ~commit:false obj mv in
-        if L.le (mupper obj mv) lower then Some lower else None
+        let lower = constrain_lower_morphvar ~commit:false mv in
+        if C.le obj (mupper mv) lower then Some lower else None
     | Amodemeet (a, mvs) ->
         let upper =
-          List.fold_left (fun x mv -> L.meet x (mupper obj mv)) a mvs
+          List.fold_left (fun x mv -> C.meet obj x (mupper mv)) a mvs
         in
         let lower =
           List.fold_left
             (fun x mv ->
-              L.meet x (constrain_lower_morphvar ~commit:false obj mv))
+              C.meet obj x (constrain_lower_morphvar ~commit:false mv))
             a mvs
         in
-        if L.le upper lower then Some upper else None
+        if C.le obj upper lower then Some upper else None
     | Amodejoin (a, mvs) ->
         let upper =
-          List.fold_left (fun x mv -> L.join x (mupper obj mv)) a mvs
+          List.fold_left (fun x mv -> C.join obj x (mupper mv)) a mvs
         in
         let lower =
           List.fold_left
             (fun x mv ->
-              L.join x (constrain_lower_morphvar ~commit:false obj mv))
+              C.join obj x (constrain_lower_morphvar ~commit:false mv))
             a mvs
         in
-        if L.le upper lower then Some lower else None
+        if C.le obj upper lower then Some lower else None
 
   let print :
       type a l r.
-      a C.obj ->
       ?verbose:bool ->
       ?axis:string ->
+      a C.obj ->
       Format.formatter ->
       (a, l * r) mode ->
       unit =
-   fun obj ?(verbose = true) ?axis ppf m ->
+   fun ?(verbose = true) ?axis obj ppf m ->
     print_raw obj ~verbose ?axis ppf
       (match check_const obj m with None -> m | Some a -> Amode a)
 
   let newvar_above (type a) ?hint (obj : a C.obj) =
-    let module L = (val C.obj obj) in
     function
-    | Amode a when L.le L.max a -> (Amode a, false)
+    | Amode a when C.le obj (C.max obj) a -> (Amode a, false)
     | m ->
         let m' = newvar ?hint obj in
         let r = submode_try ~logging:false obj m m' in
@@ -514,20 +521,22 @@ struct
         (allow_right m', true)
 
   let newvar_below (type a) ?hint (obj : a C.obj) =
-    let module L = (val C.obj obj) in
     function
-    | Amode a when L.le a L.min -> (Amode a, false)
+    | Amode a when C.le obj a (C.min obj) -> (Amode a, false)
     | m ->
         let m' = newvar ?hint obj in
         let r = submode_try ~logging:false obj m' m in
         (match r with
-        | Ok None -> ()
-        | _ -> assert false
-        );
+        | Ok None -> ();
+        | Ok (Some _ ) -> assert false;
+        | Error () -> begin
+          Format.eprintf "%a\n" (print_raw obj ~verbose:true ?axis:None) m;
+          assert false
+        end);
         (allow_left m', true)
 end
 
-module Polarized_solver (C : Mono_lattices) = struct
+module Solver_polarized (C : Lattices_mono) = struct
   (* We do a small generalization of mono_lattices and mono_solver.
      First, we construct a new category of lattices out of (C : Mono_lattices).
      The objects are two copies of the objects in C via constructors Positive and
@@ -549,7 +558,7 @@ module Polarized_solver (C : Mono_lattices) = struct
      Hopefully everything here will be inlined and optimized away.
   *)
 
-  module S = Mono_solver (C)
+  module S = Solver_mono (C)
 
   type 'a neg = Neg of 'a [@@unboxed]
   type 'a pos = Pos of 'a [@@unboxed]
@@ -605,20 +614,19 @@ module Polarized_solver (C : Mono_lattices) = struct
   let apply :
       type a b d0 d1 e0 e1.
       a obj ->
-      b obj ->
       (a, d0 * d1, b, e0 * e1) morph ->
       (a, d0 * d1) mode ->
       (b, e0 * e1) mode =
-   fun src dst f ->
-    match (src, dst, f) with
-    | Positive src, Positive dst, Pos_Pos f ->
-        fun (Positive m) -> Positive (S.apply src dst f m)
-    | Positive src, Negative dst, Pos_Neg f ->
-        fun (Positive m) -> Negative (S.apply src dst f m)
-    | Negative src, Positive dst, Neg_Pos f ->
-        fun (Negative m) -> Positive (S.apply src dst f m)
-    | Negative src, Negative dst, Neg_Neg f ->
-        fun (Negative m) -> Negative (S.apply src dst f m)
+   fun src f ->
+    match (src, f) with
+    | Positive src, Pos_Pos f ->
+        fun (Positive m) -> Positive (S.apply src f m)
+    | Positive src, Pos_Neg f ->
+        fun (Positive m) -> Negative (S.apply src f m)
+    | Negative src, Neg_Pos f ->
+        fun (Negative m) -> Positive (S.apply src f m)
+    | Negative src, Neg_Neg f ->
+        fun (Negative m) -> Negative (S.apply src f m)
 
   let newvar : type a l r. ?hint:string -> a obj -> (a, l * r) mode =
    fun ?hint -> function
@@ -757,9 +765,9 @@ module Polarized_solver (C : Mono_lattices) = struct
         fun (Negative m) -> Option.map (fun x -> Neg x) (S.check_const obj m)
 
   let print :
-      type a. a obj -> ?verbose:bool -> ?axis:string -> _ -> (a, _) mode -> unit
+      type a.  ?verbose:bool -> ?axis:string -> a obj -> _ -> (a, _) mode -> unit
       =
-   fun obj ?(verbose = false) ?axis ppf m ->
+   fun ?(verbose = false) ?axis obj ppf m ->
     match (obj, m) with
     | Positive obj, Positive m -> S.print ~verbose ?axis obj ppf m
     | Negative obj, Negative m -> S.print ~verbose ?axis obj ppf m

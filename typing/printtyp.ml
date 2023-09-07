@@ -24,7 +24,6 @@ open Asttypes
 open Layouts
 open Types
 open Mode
-open Mode_intf
 open Btype
 open Outcometree
 
@@ -1103,7 +1102,7 @@ let add_type_to_preparation = prepare_type
 let print_labels = ref true
 
 let tree_of_mode mode =
-  let {locality; uniqueness; linearity} = Alloc.check_const mode in
+  let (locality, linearity, uniqueness) = Alloc.check_const mode in
   let oam_locality =
     match locality with
     | Some Global -> Olm_global

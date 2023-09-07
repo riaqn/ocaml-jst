@@ -24,7 +24,6 @@ open Typedtree
 open Layouts
 open Types
 open Mode
-open Mode_intf
 open Ctype
 
 exception Already_bound
@@ -415,7 +414,7 @@ let get_alloc_mode styp =
     | Error () ->
       raise (Error(styp.ptyp_loc, Env.empty, Unsupported_extension Unique))
   in
-  { locality = locality; uniqueness; linearity }
+  (locality, linearity, uniqueness )
 
 let rec extract_params styp =
   let final styp =
@@ -476,12 +475,12 @@ and transl_type_aux env policy mode styp =
         | (l, arg_mode, arg) :: rest ->
           check_arg_type arg;
           let arg_cty = transl_type env policy arg_mode arg in
-          let acc_mode =
+          let (loc, lin, _) =
             Alloc.Const.join
               (Alloc.Const.close_over arg_mode)
               (Alloc.Const.partial_apply acc_mode)
           in
-          let acc_mode = {acc_mode with uniqueness = Uniqueness.Const.Shared } in
+          let acc_mode = (loc, lin, Uniqueness.Const.Shared) in
           let ret_mode =
             match rest with
             | [] -> ret_mode
